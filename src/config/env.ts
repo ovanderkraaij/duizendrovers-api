@@ -21,7 +21,7 @@ export const env = {
   },
 
   wp: {
-    base: req("WP_BASE")
+    base: req("WP_BASE_URL")
   },
 
   corsOrigin: (process.env.CORS_ORIGIN ?? "").split(",").filter(Boolean)
