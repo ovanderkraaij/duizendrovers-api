@@ -16,7 +16,8 @@
     "firebase-admin": "^13.5.0",
     "helmet": "^7.1.0",
     "morgan": "^1.10.0",
-    "mysql2": "^3.11.0"
+    "mysql2": "^3.11.0",
+    "openai": "^6.5.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
