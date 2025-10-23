@@ -1,3 +1,4 @@
+//src/data/sql.ts
 // Backtick-quote an identifier (e.g., column or table)
 export function qid(id: string) {
     // allow only alnum + underscore to prevent injection; then wrap in backticks

@@ -1,18 +1,27 @@
+//src/data/lookups.ts
 import type { RowDataPacket } from "mysql2";
 import { pool } from "../db";
 import { qid, placeholders } from "../data/sql";
 import type { Season, League, User, ExpandKey } from "../types/domain";
 
-/**
- * Registry describing how to fetch each domain object by ID.
- * - table: DB table name
- * - columns: extra columns (id is auto-included)
- * - projector: maps a DB row -> typed domain object
- */
-const REGISTRY = {
+/** ---- registry types ---- */
+type RegistryEntry<T> = {
+    table: string;
+    columns: readonly string[];
+    projector: (row: any) => T;
+};
+
+type Registry = {
+    season: RegistryEntry<Season>;
+    league: RegistryEntry<League>;
+    user: RegistryEntry<User>;
+};
+
+/** ---- concrete registry ---- */
+const REGISTRY: Registry = {
     season: {
         table: "season",
-        columns: ["label"] as const,
+        columns: ["label"],
         projector: (r: any): Season => ({
             id: Number(r.id),
             label: r.label ?? null,
@@ -20,7 +29,7 @@ const REGISTRY = {
     },
     league: {
         table: "league",
-        columns: ["label"] as const,
+        columns: ["label"],
         projector: (r: any): League => ({
             id: Number(r.id),
             label: r.label ?? null,
@@ -28,7 +37,7 @@ const REGISTRY = {
     },
     user: {
         table: "users",
-        columns: ["firstname", "infix", "lastname"] as const,
+        columns: ["firstname", "infix", "lastname"],
         projector: (r: any): User => ({
             id: Number(r.id),
             firstname: r.firstname ?? null,
@@ -36,14 +45,7 @@ const REGISTRY = {
             lastname: r.lastname ?? null,
         }),
     },
-} as const satisfies Record<
-    ExpandKey,
-    {
-        table: string;
-        columns: readonly string[];
-        projector: (row: any) => any;
-    }
-    >;
+};
 
 /** ---- tiny in-memory cache with TTL ---- */
 type Entry<T> = { at: number; data: Map<number, T> };
@@ -61,20 +63,20 @@ function setCached<T>(key: string, data: Map<number, T>) {
 }
 
 /**
- * Generic fetcher for any ExpandKey (season | league | user)
- * Returns a Map<id, DomainObject> suitable for enrichment.
+ * Generic fetcher for any ExpandKey ("season" | "league" | "user")
+ * Returns a Map<id, DomainObject>.
  */
-export async function getLookupMap<K extends ExpandKey>(
-    key: K,
+export async function getLookupMap(
+    key: ExpandKey,
     ids: number[]
-): Promise<Map<number, K extends "season" ? Season : K extends "league" ? League : User>> {
+): Promise<Map<number, any>> {
     const unique = Array.from(new Set(ids)).filter((n) => Number.isFinite(n));
     if (unique.length === 0) return new Map();
 
-    const reg = REGISTRY[key];
+    const reg = REGISTRY[key as keyof Registry] as RegistryEntry<any>;
     const cacheKey = `${key}:${unique.sort((a, b) => a - b).join(",")}`;
-    const cached = getCached<typeof reg.projector extends (r: any) => infer T ? T : never>(cacheKey);
-    if (cached) return cached as any;
+    const cached = getCached<any>(cacheKey);
+    if (cached) return cached;
 
     const selectCols = ["id", ...reg.columns].map((c) => qid(c)).join(", ");
     const sql = `SELECT ${selectCols} FROM ${qid(reg.table)} WHERE ${qid("id")} IN (${placeholders(unique.length)})`;
@@ -87,15 +89,21 @@ export async function getLookupMap<K extends ExpandKey>(
     }
 
     setCached(cacheKey, map);
-    return map as any;
+    return map;
 }
 
-/** Convenience wrappers (optional; use getLookupMap directly if you prefer) */
-export const mapSeasons = (ids: number[]) => getLookupMap("season", ids);
-export const mapLeagues = (ids: number[]) => getLookupMap("league", ids);
-export const mapUsers   = (ids: number[]) => getLookupMap("user", ids);
+/** Convenience wrappers with strong return types */
+export async function mapSeasons(ids: number[]): Promise<Map<number, Season>> {
+    return (await getLookupMap("season", ids)) as Map<number, Season>;
+}
+export async function mapLeagues(ids: number[]): Promise<Map<number, League>> {
+    return (await getLookupMap("league", ids)) as Map<number, League>;
+}
+export async function mapUsers(ids: number[]): Promise<Map<number, User>> {
+    return (await getLookupMap("user", ids)) as Map<number, User>;
+}
 
-/** Optional: a display helper if you want a ready-made full name */
+/** Optional: display helper */
 export function userDisplayName(u: User | null | undefined) {
     if (!u) return "";
     const parts = [u.firstname, u.infix, u.lastname].filter(Boolean);

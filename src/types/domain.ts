@@ -1,3 +1,4 @@
+//src/types/domain.ts
 // === Core domain models (1:1 with DB tables) ===
 export interface Classification {
     season_id: number;
@@ -62,4 +63,80 @@ export function parseVirtualParam(p: string): boolean {
     const v = (p ?? "").toString().trim().toLowerCase();
     if (v === "1" || v === "virtual") return true;
     return false;
+}
+
+export type ID = number;
+
+export type ResultTypeLabel =
+    | 'list'
+    | 'open'
+    | 'time'
+    | 'decimal'
+    | 'mcm'
+    | 'football'
+    | 'hockey';
+
+export interface Bet {
+    id: ID;
+    label: string;
+    seasonId: ID;
+    deadline?: string; // ISO
+    active: boolean;
+    closed: boolean;
+}
+
+export interface Question {
+    id: ID;
+    betId: ID;
+    questionId?: ID | null; // null for main
+    resultTypeId: ID;
+    resultTypeLabel: ResultTypeLabel;
+    groupCode: number;
+    margin?: number | null; // null => no margin
+    step?: number | null;   // for margin
+    lineup: number;
+    points: number;         // main points or bonus points (0 for sub)
+    average: number;        // divisor in preclassification
+    block: boolean;         // podium groups
+    title?: string | null;
+    label: string;
+    descr?: string | null;
+    sportId?: ID | null;
+}
+
+export interface Answer {
+    id?: ID;
+    questionId: ID;
+    userId: ID;
+    /** Raw result value as stored in DB (already normalized for open/time/mcm/decimal/football/hockey). */
+    result: string;
+    label: string; // human label
+    points: number;
+    score: number;
+    correct: '0' | '1';
+    posted: '0' | '1';
+    eliminated: '0' | '1';
+    gray: '0' | '1';
+    listItemId?: ID | null; // when resulttype = list
+}
+
+export interface ListItemRef { id: ID; label: string; }
+
+export interface SubmitPayload {
+    betId: ID;
+    userId: ID;
+    answers: Array<
+        | { type: 'list'; questionId: ID; listItemId: ID }
+        | { type: 'time'; questionId: ID; label: string }          // HH:MM:SS
+        | { type: 'decimal'; questionId: ID; label: string }       // locale-aware, may contain comma
+        | { type: 'mcm'; questionId: ID; label: string }           // M,CC (e.g., '7,23')
+        | { type: 'open'; questionId: ID; label: string }          // free text
+        | { type: 'football' | 'hockey'; questionId: ID; baseScore: string; drawTag?: 'twnv'|'uwnv'|'twns'|'uwns' }
+        >;
+}
+
+export interface NormalizedResult {
+    result: string; // DB result value
+    label: string;  // display label
+    listItemId?: ID | null;
 }
