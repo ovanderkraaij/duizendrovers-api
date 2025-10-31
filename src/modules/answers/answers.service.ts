@@ -484,4 +484,17 @@ export class AnswerService {
 
         return {sqlUsers: sql, paramsUsers: params};
     }
+    async getExistingForBetUser(betId: number, userId: number) {
+        const rows = await this.answers.getPostedForBetUser(betId, userId);
+        return {
+            betId, userId,
+            hasSubmitted: rows.length > 0,
+            answers: rows.map(r => ({
+                questionId: Number(r.questionId),
+                listItemId: r.listItemId != null ? Number(r.listItemId) : null,
+                label: String(r.label ?? ""),
+                result: String(r.result ?? ""),
+            })),
+        };
+    }
 }

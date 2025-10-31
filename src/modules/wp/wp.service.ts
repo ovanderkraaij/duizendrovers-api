@@ -1,3 +1,4 @@
+//src/modules/wp/wp.service.ts
 import fetch from "node-fetch";
 import { llmLog } from "../llm/llm.debug";
 import fs from "fs";

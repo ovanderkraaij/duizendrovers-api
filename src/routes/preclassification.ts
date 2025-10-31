@@ -26,4 +26,18 @@ router.post("/:betId/rebuild", async (req, res, next) => {
     }
 });
 
+// POST /v1/preclassification/list   { bet_id }
+router.post("/list", async (req, res, next) => {
+    try {
+        const bet_id = Number(req.body?.bet_id);
+        if (!Number.isFinite(bet_id)) {
+            return res.status(400).json({ error: "bet_id required" });
+        }
+        const dto = await preSvc.list(bet_id);
+        res.json(dto);
+    } catch (e) {
+        next(e);
+    }
+});
+
 export default router;

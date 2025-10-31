@@ -83,8 +83,8 @@ export async function getCalendar(): Promise<CalendarItem[]> {
         return {
             id: ev.id,
             label: ev.label,
-            active: ev.active === 1,
-            virtual: ev.virtual === 1,
+            active: toBool(ev.active),
+            virtual: toBool(ev.virtual),
             sportId: ev.sport_id ?? null,
 
             // DB deadline should already be ISO or YYYY-MM-DD (we still normalize later when sorting)
@@ -127,4 +127,12 @@ export async function getCalendar(): Promise<CalendarItem[]> {
     });
 
     return merged;
+}
+function toBool(v: unknown): boolean {
+    if (v === true) return true;
+    if (v === false) return false;
+    if (typeof v === 'number') return v !== 0;
+    if (typeof v === 'string') return v.trim() === '1' || v.trim().toLowerCase() === 'true';
+    if (Buffer.isBuffer(v)) return v.length > 0 && v[0] === 1; // for BIT(1)
+    return false;
 }

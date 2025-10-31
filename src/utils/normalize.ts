@@ -1,6 +1,4 @@
-// -----------------------------------------
-// file: src/utils/normalize.ts
-// -----------------------------------------
+//src/utils/normalize.ts
 import { NormalizedResult } from '../types/domain';
 
 /** Pad integer to 2 digits. */

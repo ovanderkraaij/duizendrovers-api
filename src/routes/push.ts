@@ -1,3 +1,4 @@
+//src/routes/push.ts
 import { Router } from "express";
 import { getLatestTokenForUser } from "../modules/push/push.repo";
 import { sendPush, sendPushOrTopic, sendPushToTopic } from "../modules/push/push.service";

@@ -1,4 +1,4 @@
-// src/modules/preclassification/service.ts
+// src/modules/preclassification/preclassifcation.service.ts
 import { PreclassificationRepo } from './preclassification.repo';
 
 function formatInTimeZoneISO(date: Date, timeZone: string): string {
@@ -41,4 +41,45 @@ export class PreclassificationService {
         }
         return { sequence: newSeq, count: rows.length };
     }
+    async list(bet_id: number) {
+        const pair = await this.repo.get_latest_two_sequences(bet_id);
+        const latest = pair.latest;
+        const previous = pair.previous;
+
+        if (!latest) {
+            return {
+                bet_id,
+                sequence: null,
+                previous_sequence: null,
+                standings: [] as any[],
+            };
+        }
+
+        const latest_rows = await this.repo.get_rows_for_sequence(bet_id, latest);
+        const prev_rows   = previous ? await this.repo.get_rows_for_sequence(bet_id, previous) : [];
+        const prev_by_user = new Map<number, { seed: number }>();
+        for (const r of prev_rows) prev_by_user.set(r.user_id, { seed: r.seed });
+
+        const standings = latest_rows
+            .map(r => {
+                const prev_seed = prev_by_user.get(r.user_id)?.seed ?? null;
+                const movement = (prev_seed == null) ? 0 : (prev_seed - r.seed); // up is positive
+                return {
+                    user_id: r.user_id,
+                    points: r.points,
+                    seed: r.seed,
+                    previous_seed: prev_seed,
+                    movement,
+                };
+            })
+            .sort((a, b) => a.seed - b.seed);
+
+        return {
+            bet_id,
+            sequence: latest,
+            previous_sequence: previous,
+            standings,
+        };
+    }
 }
+

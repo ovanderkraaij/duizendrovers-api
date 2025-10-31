@@ -139,4 +139,19 @@ export class AnswersRepo {
         }
         await this.pool.execute(sql, params);
     }
+
+    async getPostedForBetUser(betId: number, userId: number) {
+        const [rows] = await this.pool.query(
+            `
+      SELECT a.question_id AS questionId, a.label, a.result, a.listitem_id AS listItemId
+      FROM answer a
+      JOIN question q ON q.id = a.question_id
+      WHERE q.bet_id = ? AND a.user_id = ? AND a.posted = '1'
+      ORDER BY q.lineup ASC, a.id DESC
+      `,
+            [betId, userId]
+        );
+        return rows as any[];
+    }
 }
+

@@ -140,3 +140,50 @@ export interface NormalizedResult {
     label: string;  // display label
     listItemId?: ID | null;
 }
+
+export interface Squad {
+    id: number;
+    label: string;
+    scode?: string | null;
+    color?: string | null;
+    bgcolor?: string | null;
+}
+
+export interface SquadMember {
+    user_id: number;
+    is_captain: boolean; // '1' -> true, else false
+}
+
+export interface SquadStanding {
+    squadId: number;
+    label: string;
+
+    // Totals computed at `sequence`
+    score: number;
+
+    // Totals computed at `previousSequence` (or falling back if none)
+    previousScore: number;
+
+    // Seed ordering (1-based, ties share same seed)
+    seed: number;
+    previousSeed: number;
+
+    // Up/down/equal based on previousSeed vs seed
+    evolution: "up" | "down" | "equal";
+
+    // Optional: per-user total (already captain-adjusted & normalized per question)
+    perUserTotals?: Record<number, number>;
+
+    // Optional: raw members list (handy for FE)
+    members?: SquadMember[];
+}
+
+export interface SquadStandingsResponse {
+    seasonId: number;
+    leagueId: number;           // always 1 for now
+    virtual: boolean;
+    sequence: number;           // latest seq for the chosen dataset (virtual/real)
+    previousSequence: number | null;
+    smallestSquadSize: number;
+    standings: SquadStanding[];
+}
