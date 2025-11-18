@@ -68,4 +68,23 @@ router.post("/", async (req, res, next) => {
     }
 });
 
+router.post("/status", async (req, res, next) => {
+    try {
+        const bet_id  = Number(req.body?.bet_id);
+        const user_id = Number(req.body?.user_id);
+        if (!Number.isFinite(bet_id) || !Number.isFinite(user_id)) {
+            return res.status(400).json({ error: "bet_id and user_id are required" });
+        }
+
+        const dto = await answerSvc.getExistingForBetUser(bet_id, user_id);
+        // Return only what the FE needs for routing; keep snake_case from DB semantics.
+        return res.json({
+            bet_id: dto.betId,
+            user_id: dto.userId,
+            has_submitted: dto.hasSubmitted,
+        });
+    } catch (e) {
+        next(e);
+    }
+});
 export default router;

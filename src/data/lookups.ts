@@ -1,5 +1,5 @@
-//src/data/lookups.ts
-import type { RowDataPacket } from "mysql2";
+// src/data/lookups.ts
+import type { RowDataPacket } from "mysql2/promise";
 import { pool } from "../db";
 import { qid, placeholders } from "../data/sql";
 import type { Season, League, User, ExpandKey } from "../types/domain";
@@ -64,7 +64,6 @@ function setCached<T>(key: string, data: Map<number, T>) {
 
 /**
  * Generic fetcher for any ExpandKey ("season" | "league" | "user")
- * Returns a Map<id, DomainObject>.
  */
 export async function getLookupMap(
     key: ExpandKey,
@@ -103,7 +102,7 @@ export async function mapUsers(ids: number[]): Promise<Map<number, User>> {
     return (await getLookupMap("user", ids)) as Map<number, User>;
 }
 
-/** Optional: display helper */
+/** Display helper */
 export function userDisplayName(u: User | null | undefined) {
     if (!u) return "";
     const parts = [u.firstname, u.infix, u.lastname].filter(Boolean);

@@ -1,4 +1,4 @@
-// src/modules/preclassification/preclassifcation.service.ts
+// src/modules/preclassification/preclassification.service.ts
 import { PreclassificationRepo } from './preclassification.repo';
 
 function formatInTimeZoneISO(date: Date, timeZone: string): string {
@@ -41,45 +41,68 @@ export class PreclassificationService {
         }
         return { sequence: newSeq, count: rows.length };
     }
+
+    /**
+     * Latest pre-classification with movement and optional nested user info,
+     * plus submitted/participants counts and not_submitted details for the subtitle panel.
+     */
     async list(bet_id: number) {
-        const pair = await this.repo.get_latest_two_sequences(bet_id);
-        const latest = pair.latest;
-        const previous = pair.previous;
+        const standings = await this.repo.fetchLatestWithMovementAndUser(bet_id);
+        const latest = await this.repo.getMaxSequence(bet_id);
+        const previous = latest && latest > 1 ? latest - 1 : null;
+        const bet_title = await this.repo.getBetLabel(bet_id);
 
-        if (!latest) {
-            return {
-                bet_id,
-                sequence: null,
-                previous_sequence: null,
-                standings: [] as any[],
-            };
-        }
+        // NEW: counts + not_submitted
+        const season_id = await this.repo.getBetSeasonId(bet_id);
+        let submitted_count = 0;
+        let participants_total = 0;
+        let not_submitted: Array<{
+            user_id: number;
+            firstname: string | null;
+            infix: string | null;
+            lastname: string | null;
+            display_name: string;
+            is_captain: boolean;
+            squad: { abbr: string | null; color: string | null };
+        }> = [];
 
-        const latest_rows = await this.repo.get_rows_for_sequence(bet_id, latest);
-        const prev_rows   = previous ? await this.repo.get_rows_for_sequence(bet_id, previous) : [];
-        const prev_by_user = new Map<number, { seed: number }>();
-        for (const r of prev_rows) prev_by_user.set(r.user_id, { seed: r.seed });
+        if (season_id) {
+            const [participants, submittedSet, squadMap] = await Promise.all([
+                this.repo.listSeasonParticipants(season_id),
+                this.repo.listSubmittedUserIdsForBet(bet_id),
+                this.repo.mapUserSquadInfo(season_id),
+            ]);
 
-        const standings = latest_rows
-            .map(r => {
-                const prev_seed = prev_by_user.get(r.user_id)?.seed ?? null;
-                const movement = (prev_seed == null) ? 0 : (prev_seed - r.seed); // up is positive
+            participants_total = participants.length;
+            submitted_count = Array.from(submittedSet).length;
+
+            const ns = participants.filter(p => !submittedSet.has(p.user_id)).map(p => {
+                const sq = squadMap.get(p.user_id);
+                const display = [p.firstname, p.infix, p.lastname].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
                 return {
-                    user_id: r.user_id,
-                    points: r.points,
-                    seed: r.seed,
-                    previous_seed: prev_seed,
-                    movement,
-                };
-            })
-            .sort((a, b) => a.seed - b.seed);
+                    user_id: p.user_id,
+                    firstname: p.firstname,
+                    infix: p.infix,
+                    lastname: p.lastname,
+                    display_name: display || `User ${p.user_id}`,
+                    is_captain: sq?.is_captain ?? false,
+                    squad: { abbr: sq?.abbr ?? null, color: sq?.bg ?? null, fg: sq?.fg ?? null },                };
+            });
+
+            // FE can sort, but return a sensible default (A–Z)
+            ns.sort((a, b) => a.display_name.localeCompare(b.display_name, 'nl', { sensitivity: 'base' }));
+            not_submitted = ns;
+        }
 
         return {
             bet_id,
-            sequence: latest,
+            bet_title,
+            sequence: latest ?? null,
             previous_sequence: previous,
             standings,
+            submitted_count,
+            participants_total,
+            not_submitted,
         };
     }
 }
-

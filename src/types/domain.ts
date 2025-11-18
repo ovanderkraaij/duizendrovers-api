@@ -1,4 +1,4 @@
-//src/types/domain.ts
+// src/types/domain.ts
 // === Core domain models (1:1 with DB tables) ===
 export interface Classification {
     season_id: number;

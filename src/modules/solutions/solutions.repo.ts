@@ -1,4 +1,4 @@
-//src/modules/solutions/solutions.repo.ts
+// src/modules/solutions/solutions.repo.ts
 import { Pool } from "mysql2/promise";
 
 type Row = Record<string, any>;
@@ -21,12 +21,12 @@ export class SolutionsRepo {
     async resetCorrectAndScoreForBet(betId: number) {
         await this.pool.execute(
             `
-      UPDATE answer a
-      JOIN question q ON q.id = a.question_id
-      SET a.correct = '0', a.score = 0
-      WHERE q.bet_id = ?
-        AND (a.posted = '1' OR (q.margin IS NOT NULL AND q.step IS NOT NULL))
-    `,
+                UPDATE answer a
+                    JOIN question q ON q.id = a.question_id
+                    SET a.correct = '0', a.score = 0
+                WHERE q.bet_id = ?
+                  AND (a.posted = '1' OR (q.margin IS NOT NULL AND q.step IS NOT NULL))
+            `,
             [betId]
         );
     }
@@ -35,11 +35,11 @@ export class SolutionsRepo {
     async getMainQuestionsForBet(betId: number) {
         const [rows] = await this.pool.execute(
             `
-      SELECT id, groupcode, points, margin, step, resulttype_id
-      FROM question
-      WHERE bet_id = ? AND question_id IS NULL
-      ORDER BY id
-      `,
+                SELECT id, groupcode, points, margin, step, resulttype_id
+                FROM question
+                WHERE bet_id = ? AND question_id IS NULL
+                ORDER BY id
+            `,
             [betId]
         );
         return rows as Row[];
@@ -49,11 +49,11 @@ export class SolutionsRepo {
     async getGroupQuestions(groupcode: number) {
         const [rows] = await this.pool.execute(
             `
-      SELECT id, points, resulttype_id, margin, step
-      FROM question
-      WHERE groupcode = ?
-      ORDER BY lineup
-      `,
+                SELECT id, points, resulttype_id, margin, step
+                FROM question
+                WHERE groupcode = ?
+                ORDER BY lineup
+            `,
             [groupcode]
         );
         return rows as Row[];
@@ -64,15 +64,15 @@ export class SolutionsRepo {
         if (!qids.length) return [] as Row[];
         const [rows] = await this.pool.query(
             `
-      SELECT
-        q.id AS qid,
-        LOWER(rt.label) AS rt_label,
-        q.margin AS q_margin,
-        q.step   AS q_step
-      FROM question q
-      JOIN resulttype rt ON rt.id = q.resulttype_id
-      WHERE q.id IN (${qids.map(() => "?").join(",")})
-    `,
+                SELECT
+                    q.id AS qid,
+                    LOWER(rt.label) AS rt_label,
+                    q.margin AS q_margin,
+                    q.step   AS q_step
+                FROM question q
+                         JOIN resulttype rt ON rt.id = q.resulttype_id
+                WHERE q.id IN (${qids.map(() => "?").join(",")})
+            `,
             qids
         );
         return rows as Row[];
@@ -83,10 +83,10 @@ export class SolutionsRepo {
         if (!qids.length) return [] as Row[];
         const [rows] = await this.pool.query(
             `
-      SELECT question_id, result, listitem_id
-      FROM solution
-      WHERE question_id IN (${qids.map(() => "?").join(",")})
-      `,
+                SELECT question_id, result, listitem_id
+                FROM solution
+                WHERE question_id IN (${qids.map(() => "?").join(",")})
+            `,
             qids
         );
         return rows as Row[];
@@ -96,22 +96,22 @@ export class SolutionsRepo {
     async getPostedAnswersForBet(betId: number) {
         const [rows] = await this.pool.execute(
             `
-      SELECT a.id,
-             a.user_id,
-             a.question_id,
-             a.result,
-             a.label,
-             a.listitem_id,
-             a.points AS answer_points, -- per-user, equalized points
-             q.groupcode,
-             q.points AS question_points,
-             q.margin,
-             q.step
-      FROM answer a
-      JOIN question q ON q.id = a.question_id
-      WHERE q.bet_id = ?
-        AND a.posted = '1'
-      `,
+                SELECT a.id,
+                       a.user_id,
+                       a.question_id,
+                       a.result,
+                       a.label,
+                       a.listitem_id,
+                       a.points AS answer_points, -- per-user, equalized points
+                       q.groupcode,
+                       q.points AS question_points,
+                       q.margin,
+                       q.step
+                FROM answer a
+                         JOIN question q ON q.id = a.question_id
+                WHERE q.bet_id = ?
+                  AND a.posted = '1'
+            `,
             [betId]
         );
         return rows as Row[];
@@ -128,7 +128,9 @@ export class SolutionsRepo {
              a.result,
              a.label,
              a.listitem_id,
+             a.gray,
              a.points AS answer_points,
+             a.score  AS answer_score,
              a.posted
       FROM answer a
       JOIN question q ON q.id = a.question_id
@@ -180,16 +182,16 @@ export class SolutionsRepo {
     async markMainCorrect(mainId: number) {
         await this.pool.execute(
             `
-      UPDATE answer a
-      JOIN solution s ON s.question_id = a.question_id
-      SET a.correct = '1', a.score = a.points
-      WHERE a.question_id = ? AND a.posted = '1'
-        AND (
-          (a.listitem_id IS NOT NULL AND a.listitem_id = s.listitem_id)
-          OR
-          (a.listitem_id IS NULL AND a.result = s.result)
-        )
-      `,
+                UPDATE answer a
+                    JOIN solution s ON s.question_id = a.question_id
+                    SET a.correct = '1', a.score = a.points
+                WHERE a.question_id = ? AND a.posted = '1'
+                  AND (
+                    (a.listitem_id IS NOT NULL AND a.listitem_id = s.listitem_id)
+                   OR
+                    (a.listitem_id IS NULL AND a.result = s.result)
+                    )
+            `,
             [mainId]
         );
     }
@@ -199,22 +201,22 @@ export class SolutionsRepo {
         const idList = children.map(c => c.id);
         await this.pool.query(
             `
-      UPDATE answer a
-      JOIN solution s ON s.question_id = a.question_id
-      JOIN (
-        SELECT user_id
-        FROM answer
-        WHERE question_id = ? AND posted = '1' AND correct = '1'
-      ) AS winners ON winners.user_id = a.user_id
-      SET a.correct = '1', a.score = a.points
-      WHERE a.question_id IN (${idList.map(() => "?").join(",")})
-        AND a.posted = '1'
-        AND (
-          (a.listitem_id IS NOT NULL AND a.listitem_id = s.listitem_id)
-          OR
-          (a.listitem_id IS NULL AND a.result = s.result)
-        )
-      `,
+                UPDATE answer a
+                    JOIN solution s ON s.question_id = a.question_id
+                    JOIN (
+                    SELECT user_id
+                    FROM answer
+                    WHERE question_id = ? AND posted = '1' AND correct = '1'
+                    ) AS winners ON winners.user_id = a.user_id
+                    SET a.correct = '1', a.score = a.points
+                WHERE a.question_id IN (${idList.map(() => "?").join(",")})
+                  AND a.posted = '1'
+                  AND (
+                    (a.listitem_id IS NOT NULL AND a.listitem_id = s.listitem_id)
+                   OR
+                    (a.listitem_id IS NULL AND a.result = s.result)
+                    )
+            `,
             [mainId, ...idList]
         );
     }

@@ -42,4 +42,35 @@ export class SeasonsRepo {
         );
         return rows as LeagueRow[];
     }
+
+    /**
+     * Per-group (bundle) totals for a bet+user.
+     * - value:  SUM(answer.points) over posted answers in the group
+     * - score:  SUM(answer.score)  over posted answers in the group
+     * Subs (points=0) naturally contribute 0; bonuses contribute their own points.
+     */
+    async getGroupTotals(
+        betId: number,
+        userId: number
+    ): Promise<Array<{ group_code: number; value: number; score: number }>> {
+        const [rows] = await this.pool.query(
+            `
+      SELECT
+        q.groupcode AS group_code,
+        SUM(a.points) AS value,
+        SUM(a.score)  AS score
+      FROM answer a
+      JOIN question q ON q.id = a.question_id
+      WHERE q.bet_id = ? AND a.user_id = ? AND a.posted = '1'
+      GROUP BY q.groupcode
+      ORDER BY MIN(q.lineup) ASC, q.groupcode ASC
+      `,
+            [betId, userId]
+        );
+        return (rows as any[]).map((r) => ({
+            group_code: Number(r.group_code),
+            value: Number(r.value ?? 0),
+            score: Number(r.score ?? 0),
+        }));
+    }
 }

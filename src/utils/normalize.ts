@@ -1,4 +1,4 @@
-//src/utils/normalize.ts
+// src/utils/normalize.ts
 import { NormalizedResult } from '../types/domain';
 
 /** Pad integer to 2 digits. */
@@ -22,7 +22,7 @@ export function normalizeTime(label: string): NormalizedResult {
     const m = /^(\d{1,3}):([0-5]\d):([0-5]\d)$/.exec(trimmed);
     if (!m) {
         // If frontend validation failed to catch it, keep label but store 0 seconds.
-        return { result: "0", label: "00:00:00" };
+        return { result: '0', label: '00:00:00' };
     }
     const hh = parseInt(m[1], 10);
     const mm = parseInt(m[2], 10);
@@ -30,41 +30,38 @@ export function normalizeTime(label: string): NormalizedResult {
     const total = hh * 3600 + mm * 60 + ss;
     return { result: String(total), label: toHHMMSS(total) };
 }
-/**
- * Normalize decimal label to canonical string with dot as separator.
- * Accepts comma or dot in input.
- */
+
 /**
  * Parse a human decimal that may use ',' or '.' as decimal separator
  * and either ',' '.' or spaces as thousands separators.
  * Returns a JS number (or NaN if truly invalid).
  */
 function parseLooseDecimal(input: string): number {
-    let s = (input ?? "").trim();
+    let s = (input ?? '').trim();
 
     // quick exits
     if (!s) return NaN;
 
     // Remove spaces
-    s = s.replace(/\s+/g, "");
+    s = s.replace(/\s+/g, '');
 
     // If both ',' and '.' appear, assume the RIGHTMOST one is the decimal separator.
-    const lastComma = s.lastIndexOf(",");
-    const lastDot   = s.lastIndexOf(".");
+    const lastComma = s.lastIndexOf(',');
+    const lastDot = s.lastIndexOf('.');
     if (lastComma !== -1 && lastDot !== -1) {
         const decIsComma = lastComma > lastDot;
         if (decIsComma) {
             // ',' is decimal, '.' are thousands
-            s = s.replace(/\./g, "");   // drop thousands dots
-            s = s.replace(",", ".");    // decimal comma -> dot
+            s = s.replace(/\./g, ''); // drop thousands dots
+            s = s.replace(',', '.'); // decimal comma -> dot
         } else {
             // '.' is decimal, ',' are thousands
-            s = s.replace(/,/g, "");    // drop thousands commas
+            s = s.replace(/,/g, ''); // drop thousands commas
             // '.' stays as decimal
         }
     } else if (lastComma !== -1) {
         // Only comma present -> treat as decimal comma
-        s = s.replace(",", ".");
+        s = s.replace(',', '.');
     } else {
         // Only dot or neither: if only dot, it's already decimal; else, integer
         // leave as-is
@@ -72,7 +69,7 @@ function parseLooseDecimal(input: string): number {
 
     // Strip any lingering non-numeric (except leading +/-, one dot)
     // (This is defensive; normal inputs shouldn't need it.)
-    s = s.replace(/[^0-9.+-]/g, "");
+    s = s.replace(/[^0-9.+-]/g, '');
 
     const n = Number(s);
     return Number.isFinite(n) ? n : NaN;
@@ -85,30 +82,31 @@ function parseLooseDecimal(input: string): number {
  * - label:  unchanged trimmed input (UI can still show the user's original)
  */
 export function normalizeDecimal(label: string): NormalizedResult {
-    const trimmed = (label ?? "").trim();
+    const trimmed = (label ?? '').trim();
     const n = parseLooseDecimal(trimmed);
     if (!Number.isFinite(n)) {
         // If you prefer a soft fallback instead of throwing later, you can
         // return "0" here — but keeping it strict avoids silent bad data.
-        return { result: "NaN", label: trimmed };
+        return { result: 'NaN', label: trimmed };
     }
     // Keep a minimal dot-decimal string (no unnecessary trailing zeros)
     // Using String(n) preserves "270" instead of "270.0"
     return { result: String(n), label: trimmed };
 }
+
 /**
  * Normalize meters,centimeters (e.g., "7,23") to total centimeters string.
  */
 export function normalizeMCM(label: string): NormalizedResult {
-    let raw = (label ?? "").trim();
-    if (!raw) return { result: "0", label: "0,00" };
+    let raw = (label ?? '').trim();
+    if (!raw) return { result: '0', label: '0,00' };
 
     // Accept both "," and "." as separators; split on whichever appears first
-    const normalized = raw.replace(/\s+/g, "").replace(".", ",");
-    const parts = normalized.split(",");
+    const normalized = raw.replace(/\s+/g, '').replace('.', ',');
+    const parts = normalized.split(',');
 
-    const mStr = parts[0] || "0";
-    const cStr = parts[1] || "0";
+    const mStr = parts[0] || '0';
+    const cStr = parts[1] || '0';
 
     const m = parseInt(mStr, 10) || 0;
     const c = parseInt(cStr, 10) || 0;
@@ -139,9 +137,12 @@ export function passthroughList(listItemId: number, label: string): NormalizedRe
  * We do not expand <Team> here (team names are embedded in label upstream);
  * we persist the compact canonical `${baseScore}${optional(' ' + drawTag)}` form for DB `result`.
  */
-export function normalizeScoreWithDraw(baseScore: string, drawTag?: 'twnv'|'uwnv'|'twns'|'uwns'): NormalizedResult {
+export function normalizeScoreWithDraw(
+    baseScore: string,
+    drawTag?: 'twnv' | 'uwnv' | 'twns' | 'uwns'
+): NormalizedResult {
     const clean = baseScore.trim();
-    const [hStr, aStr] = clean.split('-').map(s => s.trim());
+    const [hStr, aStr] = clean.split('-').map((s) => s.trim());
     const label = clean; // UI label keeps the score entered
     if (hStr === aStr) {
         if (!drawTag) {
@@ -185,8 +186,9 @@ export function buildVariantsGeneric(center: number, margin: number, step: numbe
     for (const v of ints) {
         if (uniq.length === 0 || uniq[uniq.length - 1] !== v) uniq.push(v);
     }
-    return uniq.map(v => v / f);
+    return uniq.map((v) => v / f);
 }
+
 /** How many decimals to consider based on 'step' (e.g., 0.5 → 1, 0.25 → 2). */
 export function decimalsFromStep(step: number): number {
     const s = String(step);
@@ -213,12 +215,7 @@ export function formatLabelComma(value: number, decimals: number): string {
 
 // Returns absolute values: [center, center±step, center±2*step, ...] up to margin.
 // decimals = number of fraction digits to round to (based on step, e.g. 0.5 -> 1).
-export function buildVariantsAround(
-    center: number,
-    margin: number,
-    step: number,
-    decimals: number
-): number[] {
+export function buildVariantsAround(center: number, margin: number, step: number, decimals: number): number[] {
     const s = Math.abs(step);
     const m = Math.abs(margin);
     if (s <= 0 || m < 0) return [center];
@@ -236,7 +233,7 @@ export function buildVariantsAround(
     }
 
     // de-dupe + sort (precaution)
-    const uniq = Array.from(new Set(out.map(v => roundAt(v))));
+    const uniq = Array.from(new Set(out.map((v) => roundAt(v))));
     uniq.sort((a, b) => a - b);
     return uniq;
 }
@@ -244,8 +241,8 @@ export function buildVariantsAround(
 // utils/normalize.ts
 export function buildVariantsBySteps(
     center: number,
-    stepCount: number,   // number of steps from the base on each side
-    stepSize: number,    // the step value (same unit as center)
+    stepCount: number, // number of steps from the base on each side
+    stepSize: number, // the step value (same unit as center)
     decimals: number
 ): number[] {
     const sCount = Math.max(0, Math.round(Math.abs(stepCount)));

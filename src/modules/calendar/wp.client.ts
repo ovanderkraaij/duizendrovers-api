@@ -8,7 +8,6 @@ export type WpEvent = {
     commentCount: number;
     hasVideo: boolean;
     eventId: number | null;
-    temporaryDeadline: string | null; // as returned by WP; FE treats as end-of-day if only date
     slug: string | null;
 };
 
@@ -34,7 +33,6 @@ export async function fetchSportevenementen(page = 1, perPage = 100): Promise<Wp
             commentCount: p.comment_count ?? 0,
             hasVideo: !!(p.acf?.has_video ?? false),
             eventId: meta.event_id ? Number(meta.event_id) : null,
-            temporaryDeadline: meta._temporary_deadline || null, // WP stores as "dd-MM-yyyy" (e.g. "14-07-2019")
             slug: p.slug ?? null
         };
     });

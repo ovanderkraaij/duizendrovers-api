@@ -11,6 +11,7 @@ export interface QuestionRow {
     margin: number | null;
     step: number | null;
     lineup: number;
+    virtual: number;
     average: number;
 }
 

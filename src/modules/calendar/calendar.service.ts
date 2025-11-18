@@ -1,138 +1,140 @@
 // src/modules/calendar/calendar.service.ts
-import { fetchOpenSeasonEvents, DbEvent } from "./calendar.repo";
+import { fetchOpenSeasonEvents, fetchEventsBySeason, DbEvent } from "./calendar.repo";
 import { fetchSportevenementen, WpEvent } from "./wp.client";
+import { QuestionsRepo } from "../questions/questions.repo";
+import { QuestionService } from "../questions/questions.service";
+import { pool } from "../../db";
 
 export type CalendarItem = {
     id: number;
     label: string;
     active: boolean;
-    virtual: boolean;
+    virtual: boolean; // deprecated at bet-level but kept for FE compatibility
     sportId: number | null;
-    deadline: string | null; // DB deadline (ISO or YYYY-MM-DD)
 
+    // UTC timestamps (nullable)
+    deadlineUtc: string | null;
+    expectedUtc: string | null;
+    effectiveDeadlineUtc: string | null; // = deadlineUtc ?? expectedUtc
+
+    // WP coupling
     wpId: number | null;
+    wp_post_id?: number | null; // kept for FE convenience
+
     title: string;
     imageUrl: string | null;
     commentCount: number;
     hasVideo: boolean;
-
-    // Raw WP string (e.g., "14-07-2019") kept for display/audit
-    temporaryDeadline: string | null;
-
-    // NEW: canonical UTC ISO derived from temporaryDeadline (end-of-day Europe/Amsterdam)
-    temporaryDeadlineUtc: string | null;
-
     slug: string | null;
+
+    // question index helpers
+    mainCount: number;
+    mainIndexStart: number;
+    mainIndexEnd: number;
+
+    // Results/virtual flags
+    hasSolution: boolean;
+    virtualAnyMain: boolean; // ← NEW
 };
 
-// Converts dd-MM-yyyy -> yyyy-MM-dd; otherwise returns input unchanged.
-function normalizeDutchDateToIso(raw: string): string {
-    const m = raw.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-    if (!m) return raw;
-    const [, dd, mm, yyyy] = m;
-    return `${yyyy}-${mm}-${dd}`;
+function toBool(v: unknown): boolean {
+    if (v === true) return true;
+    if (v === false) return false;
+    if (typeof v === "number") return v !== 0;
+    if (typeof v === "string") return v.trim() === "1" || v.trim().toLowerCase() === "true";
+    if (Buffer.isBuffer(v)) return v.length > 0 && v[0] === 1;
+    return false;
 }
 
-// Return end-of-day UTC for a variety of inputs. If parsing fails, null.
-function asEndOfDayUtc(input: unknown): Date | null {
-    if (input == null) return null;
-
-    if (input instanceof Date) {
-        return isNaN(input.getTime()) ? null : input;
-    }
-
-    const raw = String(input).trim();
-    if (!raw) return null;
-
-    // Accept WP "dd-MM-yyyy" and normalize to "yyyy-MM-dd"
-    const maybeIsoDate = normalizeDutchDateToIso(raw);
-
-    // If it's date-only (YYYY-MM-DD), append end-of-day
-    const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(maybeIsoDate);
-    const withTime = isDateOnly ? `${maybeIsoDate} 23:59:59` : maybeIsoDate;
-
-    // Normalize to ISO-ish and force UTC for stable ordering
-    const iso = withTime.includes("T") ? withTime : withTime.replace(" ", "T");
-    const withZ = /Z$/.test(iso) ? iso : `${iso}Z`;
-
-    const d = new Date(withZ);
-    return isNaN(d.getTime()) ? null : d;
+/** Convert local/offseted date to ISO-8601 UTC (Z) */
+function toUtcZ(input: string | Date | null | undefined): string | null {
+    if (!input) return null;
+    const d = new Date(input);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString();
 }
 
-export async function getCalendar(): Promise<CalendarItem[]> {
-    const [events, wp] = await Promise.all([
-        fetchOpenSeasonEvents(),
-        fetchSportevenementen(1, 100),
-    ]);
-
+function mergeEventsWithWp(events: DbEvent[], wp: WpEvent[]): CalendarItem[] {
     const wpByEvent = new Map<number, WpEvent>();
-    for (const w of wp) {
-        if (w.eventId != null) wpByEvent.set(w.eventId, w);
-    }
+    for (const w of wp) if (w.eventId != null) wpByEvent.set(w.eventId, w);
 
-    const merged: CalendarItem[] = events.map((ev: DbEvent) => {
+    return events.map((ev) => {
         const w = wpByEvent.get(ev.id) || null;
 
-        // Raw WP text (often "dd-MM-yyyy"), keep as-is for display/audit
-        const tmpText = w?.temporaryDeadline ?? null;
-
-        // Canonical UTC (end-of-day) derived from tmpText, if present
-        const tmpUtcDate = asEndOfDayUtc(tmpText);
-        const tmpUtcIso = tmpUtcDate ? tmpUtcDate.toISOString() : null;
+        const deadlineUtc = toUtcZ(ev.deadline);
+        const expectedUtc = toUtcZ(ev.expected);
+        const effectiveDeadlineUtc = deadlineUtc ?? expectedUtc ?? null;
 
         return {
             id: ev.id,
             label: ev.label,
             active: toBool(ev.active),
-            virtual: toBool(ev.virtual),
+            virtual: toBool(ev.virtual), // deprecated at bet-level
             sportId: ev.sport_id ?? null,
 
-            // DB deadline should already be ISO or YYYY-MM-DD (we still normalize later when sorting)
-            deadline: ev.deadline ?? null,
+            deadlineUtc,
+            expectedUtc,
+            effectiveDeadlineUtc,
 
             wpId: w?.wpId ?? null,
+            wp_post_id: w?.wpId ?? null,
+
             title: w?.title ?? ev.label,
             imageUrl: w?.imageUrl ?? null,
             commentCount: w?.commentCount ?? 0,
             hasVideo: w?.hasVideo ?? false,
-
-            temporaryDeadline: tmpText,
-            temporaryDeadlineUtc: tmpUtcIso,
-
             slug: w?.slug ?? null,
+
+            mainCount: 0,
+            mainIndexStart: 0,
+            mainIndexEnd: 0,
+
+            hasSolution: toBool((ev as any).has_solution),
+            virtualAnyMain: toBool((ev as any).virtual_any_main), // ← NEW
         };
     });
-
-    // Sorting rule (stable):
-    // 1) Items with a DB deadline (normalized to end-of-day) come first, ascending.
-    // 2) Otherwise, items with a WP temporary deadline (canonical UTC) ascending.
-    // 3) Otherwise, undated items.
-    // Ties break by id ascending.
-    merged.sort((a, b) => {
-        const da =
-            (a.deadline && asEndOfDayUtc(a.deadline)) ||
-            (a.temporaryDeadlineUtc ? new Date(a.temporaryDeadlineUtc) : null);
-        const db =
-            (b.deadline && asEndOfDayUtc(b.deadline)) ||
-            (b.temporaryDeadlineUtc ? new Date(b.temporaryDeadlineUtc) : null);
-
-        if (da && db) {
-            const diff = da.getTime() - db.getTime();
-            if (diff !== 0) return diff;
-            return a.id - b.id;
-        }
-        if (da && !db) return -1;
-        if (!da && db) return 1;
-        return a.id - b.id;
-    });
-
-    return merged;
 }
-function toBool(v: unknown): boolean {
-    if (v === true) return true;
-    if (v === false) return false;
-    if (typeof v === 'number') return v !== 0;
-    if (typeof v === 'string') return v.trim() === '1' || v.trim().toLowerCase() === 'true';
-    if (Buffer.isBuffer(v)) return v.length > 0 && v[0] === 1; // for BIT(1)
-    return false;
+
+async function attachMainQuestionCounts(items: CalendarItem[]): Promise<CalendarItem[]> {
+    const questionsRepo = new QuestionsRepo(pool);
+    const questionsSvc = new QuestionService(questionsRepo);
+    let runningIndex = 1;
+
+    for (const item of items) {
+        try {
+            const mains = await questionsSvc.getMainQuestions(item.id);
+            const count = mains.length;
+            item.mainCount = count;
+            item.mainIndexStart = runningIndex;
+            item.mainIndexEnd = runningIndex + count - 1;
+            runningIndex += count;
+        } catch {
+            item.mainCount = 0;
+            item.mainIndexStart = runningIndex;
+            item.mainIndexEnd = runningIndex;
+        }
+    }
+    return items;
+}
+
+/** Open season */
+export async function getCalendar(): Promise<CalendarItem[]> {
+    const [events, wp]: [DbEvent[], WpEvent[]] = await Promise.all([
+        fetchOpenSeasonEvents(),
+        fetchSportevenementen(1, 100),
+    ]);
+
+    const merged = mergeEventsWithWp(events, wp);
+    return await attachMainQuestionCounts(merged);
+}
+
+/** Explicit season id */
+export async function getCalendarForSeason(seasonId: number): Promise<CalendarItem[]> {
+    const [events, wp]: [DbEvent[], WpEvent[]] = await Promise.all([
+        fetchEventsBySeason(seasonId),
+        fetchSportevenementen(1, 100),
+    ]);
+
+    const merged = mergeEventsWithWp(events, wp);
+    return await attachMainQuestionCounts(merged);
 }
