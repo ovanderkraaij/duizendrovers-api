@@ -34,7 +34,7 @@ type ModeParticipantHeader = {
 type ModeLine = {
     question_id: number;
     label: string;
-    list_item_id: number | null;
+    listitem_id: number | null;
     gray: 0 | 1;
     potential: number;
     actual: number;
@@ -45,7 +45,7 @@ type ModeLine = {
     squad_dropped?: 0 | 1;
 };
 
-type BundleModeMap = Record<string, { actual: number; potential: number }>;
+type BundleModeMap = Record<string, { actual: number; potential: number; dropped?: boolean; is_squad_member?: boolean }>;
 
 type LineModeMap = Record<string, { actual: number; potential: number }>;
 
@@ -59,13 +59,15 @@ type PublicBundle = {
 type PublicLine = {
     question_id: number;
     label: string;
-    list_item_id: number | null;
+    listitem_id: number | null;
     gray: 0 | 1;
+    kind: "main" | "sub" | "bonus";
+    is_first_bonus: boolean;
     modes: LineModeMap;
 };
 
 type PublicParticipant = {
-    user: { id: number; display_name: string };
+    user: { id: number; display_name: string; is_captain: boolean };
     bundle: PublicBundle;
     lines: PublicLine[];
 };
@@ -128,6 +130,27 @@ export class PredictionsService {
             : null;
         const firstBonusId = firstBonus ? Number(firstBonus.id) : null;
 
+        // Per-question role metadata for non-margin bundles
+        const questionRoles = new Map<number, { kind: "main" | "sub" | "bonus"; isFirstBonus: boolean }>();
+        for (const q of questions) {
+            const qid = Number(q.id);
+            const parentIdNum = q.parentId != null ? Number(q.parentId) : null;
+            const pointsNum = Number(q.points ?? 0);
+            const kindStr = (q.kind ?? "").toString().toLowerCase();
+
+            let role: "main" | "sub" | "bonus";
+            if (qid === mainId || parentIdNum == null || kindStr === "main") {
+                role = "main";
+            } else if (parentIdNum != null && pointsNum === 0) {
+                role = "sub";
+            } else {
+                role = "bonus";
+            }
+
+            const isFirstBonus = role === "bonus" && firstBonusId != null && qid === firstBonusId;
+            questionRoles.set(qid, {kind: role, isFirstBonus});
+        }
+
         const qids = questions.map((q) => Number(q.id));
 
         // 2) Answers (posted) joined with users (now includes canonical `result`)
@@ -165,7 +188,7 @@ export class PredictionsService {
             const line: ModeLine = {
                 question_id: Number(r.question_id),
                 label: String(r.label ?? ""),
-                list_item_id: r.listitem_id != null ? Number(r.listitem_id) : null,
+                listitem_id: r.listitem_id != null ? Number(r.listitem_id) : null,
                 gray: String(r.gray ?? "") === "1" ? 1 : 0,
                 potential,
                 actual,
@@ -413,135 +436,165 @@ export class PredictionsService {
         }
 
         // 8) SQUADS — populate "squads" mode for bundle + lines
+        // 8) SQUADS — populate "squads" mode for bundle + lines
         const membersData = await squadsRepo.getSeasonSquadMembers(seasonId);
         const smallest = membersData.smallest;
 
         // Map user -> { squadId, isCaptain }
         const memberOf = new Map<number, { squadId: number; isCaptain: boolean }>();
         for (const [sId, mems] of membersData.bySquad.entries()) {
-            for (const m of mems) memberOf.set(m.user_id, {squadId: sId, isCaptain: m.is_captain});
+            for (const m of mems) {
+                memberOf.set(m.user_id, { squadId: sId, isCaptain: m.is_captain });
+            }
         }
 
-        const bySquadUser = new Map<number,
-            { users: Map<number, { cap: boolean; perQActual: Map<number, number>; perQPotential: Map<number, number> }> }>();
+        // Per-squad aggregation of per-question actual/potential (score league),
+        // already including captain *2 where applicable.
+        const bySquadUser = new Map<
+            number,
+            {
+                users: Map<
+                    number,
+                    {
+                        cap: boolean;
+                        perQActual: Map<number, number>;
+                        perQPotential: Map<number, number>;
+                    }
+                    >;
+            }
+            >();
 
         for (const p of participantsInternal) {
-            const m = memberOf.get(p.user.id);
-            if (!m) continue;
-            if (!bySquadUser.has(m.squadId)) {
-                bySquadUser.set(m.squadId, {users: new Map()});
+            const mem = memberOf.get(p.user.id);
+            if (!mem) continue;
+
+            if (!bySquadUser.has(mem.squadId)) {
+                bySquadUser.set(mem.squadId, {
+                    users: new Map(),
+                });
             }
-            const users = bySquadUser.get(m.squadId)!.users;
+            const users = bySquadUser.get(mem.squadId)!.users;
+
             const entry = {
-                cap: m.isCaptain,
+                cap: mem.isCaptain,
                 perQActual: new Map<number, number>(),
                 perQPotential: new Map<number, number>(),
             };
+
             for (const l of p.lines) {
-                const a = Number(l.actual || 0) * (m.isCaptain ? 2 : 1);
-                const v = Number(l.potential || 0) * (m.isCaptain ? 2 : 1);
-                entry.perQActual.set(l.question_id, a);
-                entry.perQPotential.set(l.question_id, v);
+                const baseActual = Number(l.actual || 0);
+                const basePotential = Number(l.potential || 0);
+                const factorCap = mem.isCaptain ? 2 : 1;
+
+                entry.perQActual.set(l.question_id, baseActual * factorCap);
+                entry.perQPotential.set(l.question_id, basePotential * factorCap);
             }
+
             users.set(p.user.id, entry);
         }
 
+        // Bundle-level squads totals per user within each squad (non-margin context)
         const appliedActualByUser = new Map<number, number>();
         const appliedPotentialByUser = new Map<number, number>();
-        const perUserTotalActual = new Map<number, number>();
-        const droppedByUserQid = new Map<number, Set<number>>();
+        const droppedBundleByUser = new Map<number, boolean>();
 
-        // NOTE: kept for possible future use; margin_view now uses a value-level
-        // computation based directly on answer.score/points (see below).
-        const squadsMainActualByUser = new Map<number, number>();
-        const squadsMainPotentialByUser = new Map<number, number>();
+        if (hasMainSolution) {
+            // Only once we have a main solution do we decide who is really dropped
+            // for this bundle; before that, everyone keeps their full potential.
+            for (const [, data] of bySquadUser.entries()) {
+                const users = [...data.users.entries()];
+                const k = users.length;
+                if (k === 0) continue;
 
-        for (const [, data] of bySquadUser.entries()) {
-            const users = [...data.users.entries()];
-            const k = users.length;
-            const factor = k > 0 && smallest > 0 ? smallest / k : 1;
+                const factor = k > 0 && smallest > 0 ? smallest / k : 1;
 
-            const qset = new Set<number>();
-            for (const [, u] of users) {
-                u.perQActual.forEach((_v, qid) => qset.add(qid));
-                u.perQPotential.forEach((_v, qid) => qset.add(qid));
-            }
+                // Compute raw bundle totals per user (sum over all questions)
+                let minUid: number | null = null;
+                let minVal = Infinity;
 
-            // pre-drop totals
-            for (const [userId, u] of users) {
-                let totA = 0;
-                for (const qid of qset) {
-                    totA += u.perQActual.get(qid) ?? 0;
+                const bundleTotals = new Map<number, { actual: number; potential: number }>();
+
+                for (const [uid, u] of users) {
+                    let totA = 0;
+                    let totP = 0;
+                    u.perQActual.forEach((v) => {
+                        totA += v || 0;
+                    });
+                    u.perQPotential.forEach((v) => {
+                        totP += v || 0;
+                    });
+
+                    bundleTotals.set(uid, { actual: totA, potential: totP });
+
+                    if (totA < minVal) {
+                        minVal = totA;
+                        minUid = uid;
+                    }
                 }
-                perUserTotalActual.set(userId, round2(totA));
-            }
 
-            // drop worst per question by ACTUAL, apply normalization to survivors
-            for (const qid of qset) {
-                const vals = users.map(([uid, u]) => ({
-                    uid,
-                    vA: u.perQActual.get(qid) ?? 0,
-                    vP: u.perQPotential.get(qid) ?? 0,
-                }));
-                if (vals.length >= 2) {
-                    vals.sort((a, b) => a.vA - b.vA);
-                    const droppedUid = vals[0]?.uid;
+                // Mark the single lowest bundle actual as dropped (if >= 2 members)
+                if (k >= 2 && minUid != null) {
+                    droppedBundleByUser.set(minUid, true);
+                }
 
-                    if (typeof droppedUid === "number") {
-                        if (!droppedByUserQid.has(droppedUid)) droppedByUserQid.set(droppedUid, new Set());
-                        droppedByUserQid.get(droppedUid)!.add(qid);
-                    }
+                // Apply normalized contributions for survivors
+                for (const [uid, totals] of bundleTotals.entries()) {
+                    const isDropped = droppedBundleByUser.get(uid) === true;
+                    const contribA = isDropped ? 0 : totals.actual * factor;
+                    const contribP = isDropped ? 0 : totals.potential * factor;
 
-                    for (const it of vals) {
-                        const contribActual = it.uid === droppedUid ? 0 : it.vA * factor;
-                        const contribPotential = it.uid === droppedUid ? 0 : it.vP * factor;
-
-                        // record per-question squads contribution for the MAIN question
-                        if (qid === mainId) {
-                            squadsMainActualByUser.set(
-                                it.uid,
-                                round2((squadsMainActualByUser.get(it.uid) ?? 0) + contribActual)
-                            );
-                            squadsMainPotentialByUser.set(
-                                it.uid,
-                                round2((squadsMainPotentialByUser.get(it.uid) ?? 0) + contribPotential)
-                            );
-                        }
-
-                        if (it.uid === droppedUid) continue;
-
-                        appliedActualByUser.set(
-                            it.uid,
-                            round2((appliedActualByUser.get(it.uid) ?? 0) + contribActual)
-                        );
-                        appliedPotentialByUser.set(
-                            it.uid,
-                            round2((appliedPotentialByUser.get(it.uid) ?? 0) + contribPotential)
-                        );
-                    }
-                } else if (vals.length === 1) {
-                    const it = vals[0];
-                    const contribActual = it.vA * factor;
-                    const contribPotential = it.vP * factor;
-
-                    if (qid === mainId) {
-                        squadsMainActualByUser.set(
-                            it.uid,
-                            round2((squadsMainActualByUser.get(it.uid) ?? 0) + contribActual)
-                        );
-                        squadsMainPotentialByUser.set(
-                            it.uid,
-                            round2((squadsMainPotentialByUser.get(it.uid) ?? 0) + contribPotential)
-                        );
-                    }
+                    console.log("SQUADS DEBUG", {
+                        betId,
+                        groupCode,
+                        userId: uid,
+                        smallest,
+                        squadSize: k,
+                        factor,
+                        league1Potential: byUser.get(uid)?._sums.potential,
+                        totalsPotential: totals.potential,
+                        contribPotential: contribP,
+                        willDrop: isDropped,
+                    });
 
                     appliedActualByUser.set(
-                        it.uid,
-                        round2((appliedActualByUser.get(it.uid) ?? 0) + contribActual)
+                        uid,
+                        round2((appliedActualByUser.get(uid) ?? 0) + contribA)
                     );
                     appliedPotentialByUser.set(
-                        it.uid,
-                        round2((appliedPotentialByUser.get(it.uid) ?? 0) + contribPotential)
+                        uid,
+                        round2((appliedPotentialByUser.get(uid) ?? 0) + contribP)
+                    );
+                }
+            }
+        } else {
+            // No solution yet → no one is dropped; everyone keeps full potential.
+            for (const [, data] of bySquadUser.entries()) {
+                const users = [...data.users.entries()];
+                const k = users.length;
+                if (k === 0) continue;
+
+                const factor = k > 0 && smallest > 0 ? smallest / k : 1;
+
+                for (const [uid, u] of users) {
+                    let totA = 0;
+                    let totP = 0;
+                    u.perQActual.forEach((v) => {
+                        totA += v || 0;
+                    });
+                    u.perQPotential.forEach((v) => {
+                        totP += v || 0;
+                    });
+
+                    const contribA = totA * factor;
+                    const contribP = totP * factor;
+
+                    appliedActualByUser.set(
+                        uid,
+                        round2((appliedActualByUser.get(uid) ?? 0) + contribA)
+                    );
+                    appliedPotentialByUser.set(
+                        uid,
+                        round2((appliedPotentialByUser.get(uid) ?? 0) + contribP)
                     );
                 }
             }
@@ -556,28 +609,45 @@ export class PredictionsService {
             const appliedA = appliedActualByUser.get(uid) ?? 0;
             const appliedP = appliedPotentialByUser.get(uid) ?? 0;
 
-            bundleModes["squads"] = {
-                actual: round2(appliedA),
-                potential: round2(appliedP),
-            };
-
             const mem = memberOf.get(uid);
             const squadSize = mem ? (membersData.bySquad.get(mem.squadId)?.length ?? 0) : 0;
             const norm = squadSize > 0 && smallest > 0 ? smallest / squadSize : 1;
-            const droppedSet = droppedByUserQid.get(uid) ?? new Set<number>();
             const isCaptain = mem?.isCaptain ?? false;
+            const isSquadMember = !!mem;
 
+            // Bundle-level dropped flag:
+            // - true iff this user is the lowest bundle-actual within their squad,
+            //   and only once there is a main solution.
+            const droppedForBundle =
+                isSquadMember && hasMainSolution && droppedBundleByUser.get(uid) === true;
+
+            bundleModes["squads"] = {
+                actual: round2(appliedA),
+                potential: round2(appliedP),
+                dropped: droppedForBundle,
+                is_squad_member: isSquadMember,
+            };
+
+            // Per-line squads contributions:
+            // - If bundle-dropped → 0 for all lines in this bundle.
+            // - Otherwise: base (score-league) * captain multiplier * normalization factor.
             for (const l of p.lines) {
-                const doubledA = (l.actual || 0) * (isCaptain ? 2 : 1);
-                const doubledP = (l.potential || 0) * (isCaptain ? 2 : 1);
-                const dropped = droppedSet.has(l.question_id);
+                const baseA = Number(l.actual || 0);
+                const baseP = Number(l.potential || 0);
+                const doubledA = baseA * (isCaptain ? 2 : 1);
+                const doubledP = baseP * (isCaptain ? 2 : 1);
+
                 const lm = perQ.get(l.question_id)!;
                 lm["squads"] = {
-                    actual: dropped ? 0 : round2(doubledA * norm),
-                    potential: dropped ? 0 : round2(doubledP * norm),
+                    actual: droppedForBundle ? 0 : round2(doubledA * norm),
+                    potential: droppedForBundle ? 0 : round2(doubledP * norm),
                 };
             }
         }
+
+
+
+
 
         // 9) “You” (answers) + solutions (multi-per-qid)
         const postedYou = await this.answers.getPostedForBetUser(betId, userId);
@@ -944,7 +1014,7 @@ export class PredictionsService {
                 // answer.score / answer.points for this prediction.
                 const perValueActual = squadsActualByValueUser.get(canon);
                 const perValuePotential = squadsPotentialByValueUser.get(canon);
-                const droppedSet = squadsDroppedByValueUser.get(canon);
+                const droppedSetForValue = squadsDroppedByValueUser.get(canon);
 
                 const participants = groups[canon].participants.map((p) => {
                     const squadsActual = perValueActual?.get(p.id) ?? 0;
@@ -952,7 +1022,12 @@ export class PredictionsService {
                     const memberMeta = memberOf.get(p.id);
                     const isCaptain = memberMeta?.isCaptain ?? false;
                     const isSquadMember = !!memberMeta;
-                    const isDropped = isSquadMember ? (droppedSet?.has(p.id) ?? false) : false;
+
+                    // Dropped in margin view only makes sense once there is a solution.
+                    const isDropped =
+                        isSquadMember && hasMainSolution
+                            ? (droppedSetForValue?.has(p.id) ?? false)
+                            : false;
 
                     return {
                         id: p.id,
@@ -999,6 +1074,71 @@ export class PredictionsService {
                 middle_index,
             };
         }
+
+        // 10b) Aggregate bonus lines into the first bonus line for all modes (non-margin only)
+        // 10b) Aggregate bonus lines into the first bonus line for all modes (non-margin only)
+        if (!isMarginBundle && hasBonuses && firstBonusId != null) {
+            const bonusChildQids = new Set<number>(
+                questions
+                    .filter(
+                        (q) =>
+                            q.id !== main.id &&
+                            Number(q.parentId ?? 0) === mainId &&
+                            (q.points ?? 0) > 0
+                    )
+                    .map((q) => Number(q.id))
+            );
+
+            // If for some reason we can't identify any bonus children, bail out.
+            if (bonusChildQids.size > 0) {
+                const allBonusQids = Array.from(bonusChildQids);
+                const modeKeys = modeItems.map((m) => m.key);
+
+                for (const p of participantsInternal) {
+                    const uid = p.user.id;
+                    const perQ = lineModesByUser.get(uid);
+                    if (!perQ) continue;
+
+                    for (const modeKey of modeKeys) {
+                        // Sum actual/potential across all bonus questions for this mode
+                        let sumActual = 0;
+                        let sumPotential = 0;
+
+                        for (const qid of allBonusQids) {
+                            const lm = perQ.get(qid);
+                            if (!lm) continue;
+                            const entry = lm[modeKey];
+                            if (!entry) continue;
+                            sumActual += entry.actual || 0;
+                            sumPotential += entry.potential || 0;
+                        }
+
+                        // Write aggregated result onto the first bonus line
+                        const firstLm = perQ.get(firstBonusId);
+                        if (firstLm) {
+                            firstLm[modeKey] = {
+                                actual: round2(sumActual),
+                                potential: round2(sumPotential),
+                            };
+                        }
+
+                        // Zero out the other bonus lines for this mode, so the bundle
+                        // is visually represented only once (on the first bonus line).
+                        for (const qid of allBonusQids) {
+                            if (qid === firstBonusId) continue;
+                            const lm = perQ.get(qid);
+                            if (!lm) continue;
+                            if (lm[modeKey]) {
+                                lm[modeKey] = {
+                                    actual: 0,
+                                    potential: 0,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // 11) Build public participants for NON-MARGIN only
         let participantsPayload: PublicParticipant[] = [];
         let answers_for_you: Record<string, any> | null = answersByQid;
@@ -1021,17 +1161,27 @@ export class PredictionsService {
 
                 const lines: PublicLine[] = p.lines.map((l) => {
                     const lm = perQ.get(l.question_id) ?? {};
+                    const meta = questionRoles.get(l.question_id);
                     return {
                         question_id: l.question_id,
                         label: l.label,
-                        list_item_id: l.listitem_id,
+                        listitem_id: l.listitem_id,
                         gray: l.gray,
+                        kind: meta?.kind ?? "main",
+                        is_first_bonus: meta?.isFirstBonus ?? false,
                         modes: lm,
                     };
                 });
 
+                const mem = memberOf.get(uid);
+                const isCaptain = mem?.isCaptain ?? false;
+
                 return {
-                    user: p.user,
+                    user: {
+                        id: p.user.id,
+                        display_name: p.user.display_name,
+                        is_captain: isCaptain,
+                    },
                     bundle,
                     lines,
                 };
@@ -1207,7 +1357,7 @@ Changes summary (bundle endpoint refactor to canonical payload, 2025-11-18, upda
        • Start from answer.score (actual) and answer.points (potential) in the
          answer table for (question, canonical result, user).
        • For each value and for each squad:
-           - include all squad members (even if they did not predict that value,
+           - include all squad members (even if they didn't predict that value,
              they participate with base score 0);
            - double captain scores;
            - drop the single lowest per squad (if there are ≥ 2 members);
@@ -1256,11 +1406,17 @@ Changes summary (bundle endpoint refactor to canonical payload, 2025-11-18, upda
            anyNonGray   := exists row with result=v and gray=0
        • If there is at least one answer for v:
            - if anyGray && !anyNonGray → chip.gray = 1 (fully greyed)
-           - otherwise (at least one non-grey row) → chip.gray = 0
+           - otherwise (at least one non-grey) → chip.gray = 0
        • If there are no answers for v:
            - if v equals the solution → chip.gray = 0
            - else → chip.gray = 1
    - Possible still follows the bundle rules and uses elimination on the
      participant header, but gray for margin chips now reflects exactly
      what the admin set in the DB for that result.
-*/
+
+13) NEW (2025-11-23) — non-margin line roles + bonus aggregation:
+   - Each non-margin participants[*].lines[*] now carries:
+       kind: "main" | "sub" | "bonus"
+       is_first_bonus: boolean
+     derived from question.parentId, question.points, question.kind and mainId.
+ */
