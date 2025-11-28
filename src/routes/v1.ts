@@ -12,6 +12,7 @@ import solutionsRoutes         from "./solutions";
 import preclassificationRoutes from "./preclassification";
 import squadsRoutes            from "./squads";
 import predictionsRoutes from "./predictions";
+import wpRoutes from "./wp";
 
 const v1 = Router();
 
@@ -28,5 +29,6 @@ v1.use("/solutions",         solutionsRoutes);
 v1.use("/preclassification", preclassificationRoutes);
 v1.use("/squads",            squadsRoutes);
 v1.use("/predictions", predictionsRoutes);
+v1.use("/wp", wpRoutes);
 
 export default v1;

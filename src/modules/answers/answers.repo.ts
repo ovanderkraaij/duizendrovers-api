@@ -1,5 +1,5 @@
-//src/modules/answers/answers.repo.ts
-import { Pool } from 'mysql2/promise';
+// src/modules/answers/answers.repo.ts
+import { Pool } from "mysql2/promise";
 
 export interface CreateAnswerInput {
     questionId: number;
@@ -38,10 +38,11 @@ export class AnswersRepo {
 
     async getUserPostedAnswer(questionId: number, userId: number) {
         const [rows] = await this.pool.execute(
-            `SELECT * FROM answer
-         WHERE question_id=? AND user_id=? AND posted='1'
-         ORDER BY id DESC
-         LIMIT 1`,
+            `SELECT *
+             FROM answer
+             WHERE question_id=? AND user_id=? AND posted='1'
+             ORDER BY id DESC
+             LIMIT 1`,
             [questionId, userId]
         );
         return (rows as any[])[0] ?? null;
@@ -49,9 +50,10 @@ export class AnswersRepo {
 
     async getAnswersForUserMargin(questionId: number, userId: number) {
         const [rows] = await this.pool.execute(
-            `SELECT * FROM answer
-     WHERE question_id=? AND user_id=?
-     ORDER BY CAST(result AS DECIMAL(20,6))`,
+            `SELECT *
+             FROM answer
+             WHERE question_id=? AND user_id=?
+             ORDER BY CAST(result AS DECIMAL(20,6))`,
             [questionId, userId]
         );
         return rows as any[];
@@ -78,8 +80,8 @@ export class AnswersRepo {
         const [variants] = await this.pool.execute(
             `SELECT result, COUNT(*) AS n
              FROM answer
-            WHERE question_id = ? AND posted='1'
-            GROUP BY result`,
+             WHERE question_id = ? AND posted='1'
+             GROUP BY result`,
             [questionId]
         );
         for (const v of variants as any[]) {
@@ -89,8 +91,8 @@ export class AnswersRepo {
                 const pts = maxPoints / n;
                 await this.pool.execute(
                     `UPDATE answer
-                      SET points = ?
-                    WHERE question_id = ? AND posted='1' AND result = ?`,
+                     SET points = ?
+                     WHERE question_id = ? AND posted='1' AND result = ?`,
                     [pts, questionId, res]
                 );
             }
@@ -101,8 +103,8 @@ export class AnswersRepo {
         const [variants] = await this.pool.execute(
             `SELECT listitem_id, COUNT(*) AS n
              FROM answer
-            WHERE question_id = ? AND posted='1'
-            GROUP BY listitem_id`,
+             WHERE question_id = ? AND posted='1'
+             GROUP BY listitem_id`,
             [questionId]
         );
         for (const v of variants as any[]) {
@@ -112,8 +114,8 @@ export class AnswersRepo {
                 const pts = maxPoints / n;
                 await this.pool.execute(
                     `UPDATE answer
-                      SET points = ?
-                    WHERE question_id = ? AND posted='1' AND listitem_id = ?`,
+                     SET points = ?
+                     WHERE question_id = ? AND posted='1' AND listitem_id = ?`,
                     [pts, questionId, li]
                 );
             }
@@ -149,6 +151,33 @@ export class AnswersRepo {
       WHERE q.bet_id = ? AND a.user_id = ? AND a.posted = '1'
       ORDER BY q.lineup ASC, a.id DESC
       `,
+            [betId, userId]
+        );
+        return rows as any[];
+    }
+
+    /**
+     * NEW: all answers (posted + margin variants) for a bet & user.
+     * Used by BetsService.getBetBundles to build the per-question user block.
+     */
+    async getAllForBetUser(betId: number, userId: number) {
+        const [rows] = await this.pool.query(
+            `
+                SELECT
+                    a.question_id AS questionId,
+                    a.label,
+                    a.result,
+                    a.listitem_id AS listItemId,
+                    a.points,
+                    a.score,
+                    a.correct,
+                    a.posted
+                FROM answer a
+                         JOIN question q ON q.id = a.question_id
+                WHERE q.bet_id = ?
+                  AND a.user_id = ?
+                ORDER BY q.groupcode ASC, q.lineup ASC, a.id ASC
+            `,
             [betId, userId]
         );
         return rows as any[];

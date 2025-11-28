@@ -137,3 +137,37 @@ export async function updateWpPostContentWithContext(opts: {
     llmLog("[WP] response", res.status, text.slice(0, 400));
     if (!res.ok) throw new Error(`WP update failed ${res.status}: ${text}`);
 }
+
+// --------------------- PUBLIC API: comments -----------------------
+export async function postWpComment(opts: {
+    postId: number;
+    authorName: string;
+    authorEmail: string;
+    content: string;
+}) {
+    const url = `${API_ROOT}/comments`;
+    const payload = {
+        post: opts.postId,
+        author_name: opts.authorName,
+        author_email: opts.authorEmail,
+        content: opts.content,
+    };
+
+    llmLog("[WP][COMMENTS] POST", url, "payload:", JSON.stringify(payload));
+
+    const res = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": AUTH,
+        },
+        body: JSON.stringify(payload),
+    });
+
+    const text = await res.text();
+    llmLog("[WP][COMMENTS] response", res.status, text.slice(0, 400));
+
+    if (!res.ok) {
+        throw new Error(`WP comment failed ${res.status}: ${text}`);
+    }
+}
