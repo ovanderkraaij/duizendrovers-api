@@ -10,7 +10,7 @@ router.post("/register", async (req, res, next) => {
         const { token, platform, locale, tz } = req.body || {};
         if (!token || !platform) return res.status(400).json({ error: "token and platform required" });
 
-        const userId = Number(req.query.userId ?? 1); // ⬅️ TEMP fallback user
+        const userId = Number(req.query.userId ?? 35); // ⬅️ TEMP fallback user
         await upsertDeviceToken(userId, token, platform, locale, tz);
         res.json({ ok: true });
     } catch (e) { next(e); }

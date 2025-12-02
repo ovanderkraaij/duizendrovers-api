@@ -1,7 +1,9 @@
+// src/modules/llm/llm.debug.ts
 import fs from "fs";
 import path from "path";
+import { env } from "../../config/env";
 
-const LLM_DEBUG = process.env.LLM_DEBUG === "1";
+const LLM_DEBUG = env.llm.debug;
 
 export function llmDebugEnabled() {
     return LLM_DEBUG;

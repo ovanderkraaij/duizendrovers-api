@@ -13,6 +13,8 @@ import preclassificationRoutes from "./preclassification";
 import squadsRoutes            from "./squads";
 import predictionsRoutes from "./predictions";
 import wpRoutes from "./wp";
+import remindersRoutes from "./reminders";
+import koRoutes from "./ko";
 
 const v1 = Router();
 
@@ -30,5 +32,7 @@ v1.use("/preclassification", preclassificationRoutes);
 v1.use("/squads",            squadsRoutes);
 v1.use("/predictions", predictionsRoutes);
 v1.use("/wp", wpRoutes);
+v1.use("/reminders", remindersRoutes);
+v1.use("/ko", koRoutes);
 
 export default v1;

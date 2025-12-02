@@ -1,3 +1,4 @@
+// src/routes/answers.ts
 import { Router } from "express";
 import { pool } from "../db";
 
@@ -9,19 +10,20 @@ import { SolutionsRepo } from "../modules/solutions/solutions.repo";
 import { AnswerService } from "../modules/answers/answers.service";
 import { PreclassificationService } from "../modules/preclassification/preclassification.service";
 import { SolutionsService } from "../modules/solutions/solutions.service";
+import { env } from "../config/env";
 
 const router = Router();
 
 const answersRepo = new AnswersRepo(pool);
 const questionsRepo = new QuestionsRepo(pool);
-const preRepo      = new PreclassificationRepo(pool);
-const solsRepo     = new SolutionsRepo(pool);
+const preRepo = new PreclassificationRepo(pool);
+const solsRepo = new SolutionsRepo(pool);
 
 const answerSvc = new AnswerService(answersRepo, questionsRepo);
-const preSvc    = new PreclassificationService(preRepo);
-const solsSvc   = new SolutionsService(solsRepo);
+const preSvc = new PreclassificationService(preRepo);
+const solsSvc = new SolutionsService(solsRepo);
 
-const AUTO_APPLY_SOLUTIONS = process.env.AUTO_APPLY_SOLUTIONS === "1";
+const AUTO_APPLY_SOLUTIONS = env.answers.autoApplySolutions;
 
 /**
  * GET /api/v1/answers/:betId?userId=NN
@@ -29,7 +31,7 @@ const AUTO_APPLY_SOLUTIONS = process.env.AUTO_APPLY_SOLUTIONS === "1";
  */
 router.get("/:betId", async (req, res, next) => {
     try {
-        const betId  = Number(req.params.betId);
+        const betId = Number(req.params.betId);
         const userId = Number(req.query.userId);
         if (!Number.isFinite(betId) || !Number.isFinite(userId)) {
             return res.status(400).json({ error: "betId and userId required" });
@@ -48,8 +50,8 @@ router.get("/:betId", async (req, res, next) => {
  */
 router.post("/", async (req, res, next) => {
     try {
-        const betId       = Number(req.body?.betId);
-        const userId      = Number(req.body?.userId);
+        const betId = Number(req.body?.betId);
+        const userId = Number(req.body?.userId);
         const submissions = Array.isArray(req.body?.submissions) ? req.body.submissions : [];
 
         const out = await answerSvc.submitBatchRaw({ betId, userId, submissions });
@@ -70,7 +72,7 @@ router.post("/", async (req, res, next) => {
 
 router.post("/status", async (req, res, next) => {
     try {
-        const bet_id  = Number(req.body?.bet_id);
+        const bet_id = Number(req.body?.bet_id);
         const user_id = Number(req.body?.user_id);
         if (!Number.isFinite(bet_id) || !Number.isFinite(user_id)) {
             return res.status(400).json({ error: "bet_id and user_id are required" });
@@ -87,4 +89,5 @@ router.post("/status", async (req, res, next) => {
         next(e);
     }
 });
+
 export default router;

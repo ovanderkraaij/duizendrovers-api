@@ -1,9 +1,10 @@
-//src/modules/wp/wp.service.ts
+// src/modules/wp/wp.service.ts
 import fetch from "node-fetch";
 import { llmLog } from "../llm/llm.debug";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { env } from "../../config/env";
 
 /**
  * Delivery mode (via .env)
@@ -14,29 +15,31 @@ import crypto from "crypto";
  *
  * For HOT:
  *   WP_HOT_INBOX   = absolute path to inbox dir
- *   LLM_HOT_SECRET = shared HMAC secret
+ *   API_SECRET = shared HMAC secret
  */
-const MODE = (process.env.WP_DELIVERY_MODE || "rest").toLowerCase() as "rest" | "hot";
+const MODE = env.wp.deliveryMode;
 
 // ------------------------- REST -------------------------
 function resolveApiRoot(): string {
-    const raw = (process.env.WP_BASE_URL || "").trim().replace(/\/+$/, "");
+    const raw = (env.wp.base || "").trim().replace(/\/+$/, "");
     if (!raw) throw new Error("WP_BASE_URL is not set");
     if (raw.endsWith("/wp-json/wp/v2")) return raw;
     if (raw.includes("/wp-json/")) return raw;
     return raw + "/wp-json/wp/v2";
 }
+
 const API_ROOT = resolveApiRoot();
-const WP_USER = process.env.WP_USER || "";
-const WP_APP_PASSWORD = (process.env.WP_APP_PASSWORD || "").replace(/\s+/g, "");
+const WP_USER = env.wp.user;
+const WP_APP_PASSWORD = env.wp.appPassword;
 const AUTH = "Basic " + Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString("base64");
+
 if (MODE === "rest" && (!WP_USER || !WP_APP_PASSWORD)) {
     llmLog("[WP][REST] Warning: WP_USER or WP_APP_PASSWORD missing. Updates will fail with 401.");
 }
 
 // ------------------------- HOT --------------------------
-const HOT_INBOX = (process.env.WP_HOT_INBOX || "").trim();
-const HOT_SECRET = process.env.LLM_HOT_SECRET || "";
+const HOT_INBOX = env.wp.hotInbox;
+const HOT_SECRET = env.apiSecret;
 
 function ensureDirExists(dir: string) {
     fs.mkdirSync(dir, { recursive: true });
@@ -47,12 +50,20 @@ function safeFileBase(input: string | number): string {
 function hmacSha256(data: string, secret: string): string {
     return crypto.createHmac("sha256", secret).update(data, "utf8").digest("hex");
 }
-function nowIso() { return new Date().toISOString(); }
+function nowIso() {
+    return new Date().toISOString();
+}
 
 function hotFolderReady(): boolean {
     if (MODE !== "hot") return false;
-    if (!HOT_INBOX) { llmLog("[WP][HOT] ERROR: WP_HOT_INBOX not set."); return false; }
-    if (!HOT_SECRET) { llmLog("[WP][HOT] ERROR: LLM_HOT_SECRET not set."); return false; }
+    if (!HOT_INBOX) {
+        llmLog("[WP][HOT] ERROR: WP_HOT_INBOX not set.");
+        return false;
+    }
+    if (!HOT_SECRET) {
+        llmLog("[WP][HOT] ERROR: API_SECRET not set.");
+        return false;
+    }
     return true;
 }
 
@@ -80,13 +91,13 @@ async function writeHotEnvelope(opts: {
         meta: { producedAt: nowIso(), producer: "duizendrovers-api" },
     };
 
-    const body = JSON.stringify(payload, null, 2);         // exact bytes we sign
-    const sig  = hmacSha256(body, HOT_SECRET);
+    const body = JSON.stringify(payload, null, 2); // exact bytes we sign
+    const sig = hmacSha256(body, HOT_SECRET);
 
     const envelope = {
         signature: { alg: "HMAC-SHA256", hex: sig, hint: HOT_SECRET.slice(0, 4) + "…" },
         payload,
-        signed: body
+        signed: body,
     };
 
     fs.writeFileSync(fullPath, JSON.stringify(envelope, null, 2), "utf8");
@@ -103,7 +114,7 @@ export async function updateWpPostContent(wpId: number, content: string) {
 /** Single entry point used by routes. Internally switches by env. */
 export async function updateWpPostContentWithContext(opts: {
     wpId: number;
-    content: string;                // Markdown or HTML—your call
+    content: string; // Markdown or HTML—your call
     eventId?: number;
     language?: "nl" | "en" | string;
 }) {
@@ -126,7 +137,7 @@ export async function updateWpPostContentWithContext(opts: {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
-            "Authorization": AUTH,
+            Authorization: AUTH,
             // harmless extra header; keep if you like:
             "X-GB-App-Auth": AUTH,
         },
@@ -159,7 +170,7 @@ export async function postWpComment(opts: {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
-            "Authorization": AUTH,
+            Authorization: AUTH,
         },
         body: JSON.stringify(payload),
     });

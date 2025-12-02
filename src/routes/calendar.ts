@@ -1,6 +1,7 @@
 // src/routes/calendar.ts
 import { Router } from "express";
 import { getCalendar } from "../modules/calendar/calendar.service";
+import { env } from "../config/env";
 
 const router = Router();
 
@@ -13,7 +14,10 @@ router.get("/", async (req, res) => {
     try {
         const items = await getCalendar();
 
-        const debug = req.query.debug === "1" || process.env.DEBUG_CALENDAR === "1";
+        const debugQuery = req.query.debug === "1";
+        const debugEnv = env.debug.calendar;
+        const debug = debugQuery || debugEnv;
+
         if (debug) {
             const sample = items.slice(0, 3).map((x) => ({
                 id: x.id,

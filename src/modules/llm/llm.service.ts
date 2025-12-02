@@ -2,12 +2,13 @@
 import OpenAI from "openai";
 import { sportEventSystemPrompt, sportEventUserPrompt, SportEventContext } from "./prompts";
 import { llmLog } from "./llm.debug";
+import { env } from "../../config/env";
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+const client = new OpenAI({ apiKey: env.llm.apiKey });
 
 // Force gpt-5 by default; you can still override via .env if you want
-const MODEL = process.env.LLM_MODEL || "gpt-5";
-const MAX_TOKENS = Number(process.env.LLM_MAX_TOKENS || 4000);
+const MODEL = env.llm.model;
+const MAX_TOKENS = env.llm.maxTokens;
 
 // Remove empty/placeholder "More info" blocks and empty anchors
 function sanitizeMoreInfo(html: string, officialUrl?: string): string {
