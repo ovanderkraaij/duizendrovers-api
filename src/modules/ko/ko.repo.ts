@@ -70,122 +70,13 @@ export type ResultTypeMetaRow = {
     placeholder: string | null;
 };
 
-/**
- * Tournament DTOs for the KO article page.
- *
- * These types describe the FULL knockout tournament:
- * - middle rounds
- * - knockout rounds
- * - eliminated users per round
- * - all duels per round
- * - all answer entries per round
- */
-
-export type KoTournamentPayload = {
-    bet: {
-        id: number;
-        season_id: number | null;
-        label: string;
-        post_id: number;
-    };
-
-    tournament: {
-        current_round_id: number | null;
-        current_phase: "middle" | "knockout" | null;
-        rounds: KoTournamentRound[];
-    };
-};
-
-/**
- * A single round/question inside the tournament
- */
-export type KoTournamentRound = {
-    question_id: number;
+export type KoAnswerInsertRow = {
+    ko_question_id: number;
+    user_id: number;
+    result: string;
     label: string;
-    /**
-     * "middle" → Voorronde N
-     * "knockout" → paired rounds (Achtste finale, Kwartfinale, etc.)
-     */
-    phase: "middle" | "knockout";
-
-    /**
-     * true if:
-     * - deadline in the future
-     * - closed = 0
-     */
-    is_current: boolean;
-
-    /** Dynamic label: "Voorronde 1", "Achtste finale", "Kwartfinale", etc. */
-    round_label: string;
-
-    deadline_utc: string | null;
-    opened_utc: string | null;
-
-    /** Number of participants that entered this round */
-    participants_total: number;
-
-    /** Number of participants NOT yet eliminated before this round */
-    participants_alive: number;
-
-    /** List items for list-type resulttypes (if any) */
-    list_items: Array<{
-        id: number;
-        label: string;
-    }>;
-
-    /**
-     * All answers for all participants in this round
-     * Always alphabetical by display_name.
-     */
-    answers: {
-        entries: Array<{
-            user_id: number;
-            display_name: string;
-
-            /** Value displayed (e.g. "1-1", "2:04:10", list label) */
-            label: string | null;
-
-            /** Raw result string */
-            result: string | null;
-
-            answered_at_utc: string | null;
-
-            /** Whether the player was eliminated *in this round* */
-            eliminated_here: boolean;
-        }>;
-
-        /** List of eliminated users for this round, alphabetical */
-        eliminated: Array<{
-            user_id: number;
-            display_name: string;
-            answer_label: string | null;
-        }>;
-    };
-
-    /**
-     * Only for knockout rounds (phase = "knockout")
-     * Contains the duels (A vs B)
-     */
-    pairs: Array<{
-        home: {
-            user_id: number;
-            display_name: string;
-            label: string | null;
-            result: string | null;
-            answered_at_utc: string | null;
-        };
-
-        away: {
-            user_id: number;
-            display_name: string;
-            label: string | null;
-            result: string | null;
-            answered_at_utc: string | null;
-        };
-
-        first_answered_user_id: number | null;
-        both_submitted: boolean;
-    }>;
+    posted: "0" | "1";
+    answered: Date | null;
 };
 
 export class KoRepo {
@@ -198,18 +89,35 @@ export class KoRepo {
     async getActiveBetForSeason(seasonId: number): Promise<KoBetRow | null> {
         const [rows] = await this.pool.execute(
             `
-      SELECT *
-      FROM ko_bet
-      WHERE season_id = ?
-        AND active = '1'
-        AND closed = '0'
-      ORDER BY id DESC
-      LIMIT 1
-      `,
+                SELECT *
+                FROM ko_bet
+                WHERE season_id = ?
+                  AND active = '1'
+                  AND closed = '0'
+                ORDER BY id DESC
+                    LIMIT 1
+            `,
             [seasonId],
         );
         const row = (rows as any[])[0] ?? null;
         return row as KoBetRow | null;
+    }
+
+    /**
+     * Fetch a KO question by id.
+     */
+    async getQuestionById(id: number): Promise<KoQuestionRow | null> {
+        const [rows] = await this.pool.execute(
+            `
+      SELECT *
+      FROM ko_question
+      WHERE id = ?
+      LIMIT 1
+      `,
+            [id],
+        );
+        const row = (rows as any[])[0] ?? null;
+        return row as KoQuestionRow | null;
     }
 
     /**
@@ -305,8 +213,7 @@ export class KoRepo {
     /**
      * List items for a KO question.
      *
-     * Assumption: ko_listitem.list_id == ko_question.id
-     * (i.e. one list per KO question, keyed by ko_question.id).
+     * KO uses the shared list + question_list tables; items live in ko_listitem.
      */
     async getListItemsForQuestion(
         koQuestionId: number,
@@ -359,10 +266,12 @@ export class KoRepo {
     ): Promise<number | null> {
         const [rows] = await this.pool.execute(
             `
-      SELECT id
-      FROM ko_listitem
-      WHERE list_id = ?
-        AND label = ?
+      SELECT li.id
+      FROM ko_listitem li
+      INNER JOIN question_list ql
+        ON ql.list_id = li.list_id
+      WHERE ql.question_id = ?
+        AND li.label = ?
       LIMIT 1
       `,
             [koQuestionId, label],
@@ -370,6 +279,48 @@ export class KoRepo {
         const row = (rows as any[])[0] ?? null;
         if (!row) return null;
         return Number(row.id);
+    }
+
+    /**
+     * Insert a KO answer row.
+     */
+    async insertKoAnswer(payload: KoAnswerInsertRow): Promise<number> {
+        const [result] = await this.pool.execute(
+            `
+      INSERT INTO ko_answer
+        (ko_question_id, user_id, result, label, correct, posted, answered)
+      VALUES (?, ?, ?, ?, '0', ?, ?)
+      `,
+            [
+                payload.ko_question_id,
+                payload.user_id,
+                payload.result,
+                payload.label,
+                payload.posted,
+                payload.answered,
+            ],
+        );
+
+        const insertResult = result as any;
+        return Number(insertResult.insertId ?? 0);
+    }
+
+    /**
+     * Delete all answers for a user & KO question.
+     * We keep things simple: a submit overwrites any previous attempts.
+     */
+    async deleteAnswersForUser(
+        koQuestionId: number,
+        userId: number,
+    ): Promise<void> {
+        await this.pool.execute(
+            `
+      DELETE FROM ko_answer
+      WHERE ko_question_id = ?
+        AND user_id = ?
+      `,
+            [koQuestionId, userId],
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -383,11 +334,11 @@ export class KoRepo {
     async getQuestionsForBet(koBetId: number): Promise<KoQuestionRow[]> {
         const [rows] = await this.pool.execute(
             `
-      SELECT *
-      FROM ko_question
-      WHERE ko_bet_id = ?
-      ORDER BY id ASC
-      `,
+                SELECT *
+                FROM ko_question
+                WHERE ko_bet_id = ?
+                ORDER BY id ASC
+            `,
             [koBetId],
         );
         return rows as KoQuestionRow[];
@@ -399,10 +350,10 @@ export class KoRepo {
     async getUsersForBet(koBetId: number): Promise<KoUserKoBetRow[]> {
         const [rows] = await this.pool.execute(
             `
-      SELECT *
-      FROM ko_users_ko_bet
-      WHERE ko_bet_id = ?
-      `,
+                SELECT *
+                FROM ko_users_ko_bet
+                WHERE ko_bet_id = ?
+            `,
             [koBetId],
         );
         return rows as KoUserKoBetRow[];
@@ -414,12 +365,12 @@ export class KoRepo {
     async getAnswersForBet(koBetId: number): Promise<KoAnswerRow[]> {
         const [rows] = await this.pool.execute(
             `
-      SELECT a.*
-      FROM ko_answer a
-      INNER JOIN ko_question q ON a.ko_question_id = q.id
-      WHERE q.ko_bet_id = ?
-      ORDER BY a.ko_question_id ASC, a.user_id ASC, a.answered ASC, a.id ASC
-      `,
+                SELECT a.*
+                FROM ko_answer a
+                         INNER JOIN ko_question q ON a.ko_question_id = q.id
+                WHERE q.ko_bet_id = ?
+                ORDER BY a.ko_question_id ASC, a.user_id ASC, a.answered ASC, a.id ASC
+            `,
             [koBetId],
         );
         return rows as KoAnswerRow[];
@@ -431,12 +382,12 @@ export class KoRepo {
     async getPairsForBet(koBetId: number): Promise<KoUserPairRow[]> {
         const [rows] = await this.pool.execute(
             `
-      SELECT p.*
-      FROM ko_users_pair p
-      INNER JOIN ko_question q ON p.ko_question_id = q.id
-      WHERE q.ko_bet_id = ?
-      ORDER BY p.ko_question_id ASC, p.home_user_id ASC, p.away_user_id ASC
-      `,
+                SELECT p.*
+                FROM ko_users_pair p
+                         INNER JOIN ko_question q ON p.ko_question_id = q.id
+                WHERE q.ko_bet_id = ?
+                ORDER BY p.ko_question_id ASC, p.home_user_id ASC, p.away_user_id ASC
+            `,
             [koBetId],
         );
         return rows as KoUserPairRow[];
@@ -449,7 +400,6 @@ export class KoRepo {
      * have at least a "name" column. If there is a dedicated display_name,
      * you can adjust this method accordingly.
      */
-// src/modules/ko/ko.repo.ts
     async getUserDisplayNames(
         userIds: number[],
     ): Promise<Map<number, string>> {
@@ -486,12 +436,55 @@ export class KoRepo {
 
             const fullName = fullNameParts.join(" ").trim();
 
-            const displayName: string =
-                    fullName
+            const displayName: string = fullName;
             map.set(id, displayName);
         }
 
         return map;
     }
-}
 
+    /**
+     * Check if a user already has a posted answer for a KO question.
+     *
+     * Business rule: once a posted answer exists (including auto-assigned in a duel),
+     * the user cannot change it via the public submission endpoint.
+     */
+    async hasPostedAnswerForUser(
+        koQuestionId: number,
+        userId: number,
+    ): Promise<boolean> {
+        const [rows] = await this.pool.execute(
+            `
+            SELECT 1
+            FROM ko_answer
+            WHERE ko_question_id = ?
+              AND user_id = ?
+              AND posted = '1'
+            LIMIT 1
+            `,
+            [koQuestionId, userId],
+        );
+
+        return (rows as any[]).length > 0;
+    }
+
+    async getSolutionByQuestionId(koQuestionId: number): Promise<string | null> {
+        const [rows] = await this.pool.execute(
+            `
+            SELECT result
+            FROM ko_solution
+            WHERE ko_question_id = ?
+            LIMIT 1
+            `,
+            [koQuestionId],
+        );
+
+        const row = (rows as any[])[0] ?? null;
+        if (!row) {
+            return null;
+        }
+
+        return String(row.result);
+    }
+
+}

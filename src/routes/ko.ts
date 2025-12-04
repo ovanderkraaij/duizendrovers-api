@@ -1,3 +1,5 @@
+
+
 // src/routes/ko.ts
 import { Router } from "express";
 import { pool } from "../db";
@@ -34,6 +36,62 @@ router.post("/current", async (req, res, next) => {
         return res.json(payload);
     } catch (err) {
         next(err);
+    }
+});
+
+/**
+ * POST /api/v1/ko/submit
+ *
+ * Body:
+ * {
+ *   "ko_question_id": number,
+ *   "user_id": number,
+ *   "duel_id": string | null,
+ *   "ko_list_item_id": number | null,
+ *   "label": string | null
+ * }
+ *
+ * Rules:
+ * - Voorrondes: no duel → just insert the user's answer.
+ * - Knockout phase: duel present → submitting user gets chosen list item,
+ *   opponent automatically gets the other list item (posted=1, answered=NULL).
+ */
+router.post("/submit", async (req, res, next) => {
+    try {
+        const body = req.body ?? {};
+
+        const ko_question_id = Number(body.ko_question_id);
+        const user_id = Number(body.user_id);
+        const duel_id =
+            typeof body.duel_id === "string" ? (body.duel_id as string) : null;
+        const ko_list_item_id =
+            body.ko_list_item_id != null
+                ? Number(body.ko_list_item_id)
+                : null;
+        const label =
+            typeof body.label === "string" ? (body.label as string) : null;
+
+        if (!Number.isFinite(ko_question_id) || !Number.isFinite(user_id)) {
+            return res.status(400).json({
+                error: "ko_question_id and user_id are required and must be numeric",
+            });
+        }
+
+        await svc.submitKoAnswer({
+            ko_question_id,
+            user_id,
+            duel_id,
+            ko_list_item_id: ko_list_item_id,
+            label,
+        });
+
+        return res.json({ ok: true });
+    } catch (err) {
+        if (err instanceof Error) {
+            // Domain-level validation errors from KoService
+            return res.status(400).json({ error: err.message });
+        }
+        return next(err);
     }
 });
 
