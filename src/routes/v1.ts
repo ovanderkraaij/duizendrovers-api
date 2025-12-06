@@ -15,6 +15,7 @@ import predictionsRoutes from "./predictions";
 import wpRoutes from "./wp";
 import remindersRoutes from "./reminders";
 import koRoutes from "./ko";
+import statisticsRoutes from "./statistics";
 
 const v1 = Router();
 
@@ -34,5 +35,6 @@ v1.use("/predictions", predictionsRoutes);
 v1.use("/wp", wpRoutes);
 v1.use("/reminders", remindersRoutes);
 v1.use("/ko", koRoutes);
+v1.use("/statistics", statisticsRoutes);
 
 export default v1;
