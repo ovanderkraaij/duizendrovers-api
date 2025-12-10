@@ -3,41 +3,43 @@ import { Router } from "express";
 import { pool } from "../db";
 
 import {
+    type BullseyeRequestDto,
+    type BullseyeStatsDto,
     type StatisticsPageRequestDto,
     type StatsPageDto,
+    type MedalsRequestDto,
+    type MedalsPageDto,
 } from "../modules/statistics/statistics.types";
+
 import { StatisticsRepo } from "../modules/statistics/statistics.repo";
 import { StatisticsService } from "../modules/statistics/statistics.service";
+import { SolutionsRepo } from "../modules/solutions/solutions.repo";
 
 const router = Router();
 
-// Wire repo + service (same pattern as preclassification, squads, etc.)
+// --- Instantiate repos ---
 const statsRepo = new StatisticsRepo(pool);
-const statsSvc = new StatisticsService(statsRepo);
+const solutionsRepo = new SolutionsRepo(pool);
+
+// --- Inject BOTH repos into the service ---
+const statsSvc = new StatisticsService(statsRepo, solutionsRepo);
 
 /**
  * POST /api/v1/statistics/page
  *
  * Body:
  * {
- *   "stats_page": "total_score" | "eagles" | "total_points" | "ups_missed" | "longest_time" // optional, defaults to "total_score"
- *   "user_id": 35 | null,
- *   "is_virtual": false
+ *   "stats_page": "total_score" | "eagles" | "total_points" | "ups_missed" | "longest_time" | "most_efficient" | "on_throne"
+ *   "user_id": number | null,
+ *   "is_virtual": boolean
  * }
- *
- * Note:
- * - "eagles" shares the payload shape with "total_score" but uses weighted seasons.
- * - "total_points" shares the payload shape but uses integer points.
- * - "ups_missed" and "longest_time" share the payload shape but:
- *     • do NOT support virtual mode (supports_virtual = false)
- *     • have no supertext
- *     • use total_value formatted as "[X/Y]".
  */
 router.post("/page", async (req, res, next) => {
     try {
         const body = req.body as Partial<StatisticsPageRequestDto>;
 
-        const statsPage = (body.stats_page ?? "total_score") as StatisticsPageRequestDto["stats_page"];
+        const statsPage =
+            (body.stats_page ?? "total_score") as StatisticsPageRequestDto["stats_page"];
 
         const allowedPages: StatisticsPageRequestDto["stats_page"][] = [
             "total_score",
@@ -46,6 +48,7 @@ router.post("/page", async (req, res, next) => {
             "ups_missed",
             "longest_time",
             "most_efficient",
+            "on_throne",
         ];
 
         if (!allowedPages.includes(statsPage)) {
@@ -65,6 +68,66 @@ router.post("/page", async (req, res, next) => {
 
         const page: StatsPageDto = await statsSvc.getStatisticsPage(dto);
         return res.json(page);
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * POST /api/v1/statistics/bullseyes
+ *
+ * Body:
+ * {
+ *   "user_id": number | null,
+ *   "is_virtual": boolean
+ * }
+ *
+ * Response: BullseyeStatsDto
+ */
+router.post("/bullseyes", async (req, res, next) => {
+    try {
+        const body = req.body as Partial<BullseyeRequestDto>;
+
+        const dto: BullseyeRequestDto = {
+            user_id:
+                typeof body.user_id === "number"
+                    ? body.user_id
+                    : body.user_id ?? null,
+            is_virtual: Boolean(body.is_virtual),
+        };
+
+        const payload: BullseyeStatsDto = await statsSvc.getBullseyeStats(dto);
+        return res.json(payload);
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * POST /api/v1/statistics/medals
+ *
+ * Body:
+ * {
+ *   "user_id": number | null,
+ *   "is_virtual": boolean
+ * }
+ *
+ * Response: MedalsPageDto
+ */
+router.post("/medals", async (req, res, next) => {
+    try {
+        const body = req.body as Partial<MedalsRequestDto>;
+
+        const dto: MedalsRequestDto = {
+            user_id:
+                typeof body.user_id === "number"
+                    ? body.user_id
+                    : body.user_id ?? null,
+            is_virtual: Boolean(body.is_virtual),
+        };
+
+        const payload: MedalsPageDto = await statsSvc.getMedalsPage(dto);
+        return res.json(payload);
     } catch (err) {
         next(err);
     }

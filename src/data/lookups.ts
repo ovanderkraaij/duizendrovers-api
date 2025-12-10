@@ -29,10 +29,11 @@ const REGISTRY: Registry = {
     },
     league: {
         table: "league",
-        columns: ["label"],
+        columns: ["label", "icon"],
         projector: (r: any): League => ({
             id: Number(r.id),
             label: r.label ?? null,
+            icon: r.icon ?? null,
         }),
     },
     user: {

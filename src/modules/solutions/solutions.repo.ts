@@ -92,6 +92,45 @@ export class SolutionsRepo {
         return rows as Row[];
     }
 
+    /**
+     * Solutions + listitem metadata (label, flag, team) for a set of questions.
+     * Used by statistics (bullseyes) to enrich solution_flag / solution_team / solution_label.
+     */
+    async getSolutionsWithListMetaForQuestionIds(qids: number[]) {
+        if (!qids.length) return [] as Row[];
+
+        const [rows] = await this.pool.query(
+            `
+            SELECT
+                s.question_id,
+                s.result,
+                s.listitem_id,
+                it.label      AS item_label,
+                co.ccode      AS  country_code,
+                t.id          AS team_id,
+                t.scode       AS team_abbr,
+                t.color       AS team_fg,
+                t.bgcolor     AS team_bg,
+                l.show_teams  AS show_teams
+            FROM solution s
+            LEFT JOIN listitem li
+                ON li.id = s.listitem_id
+            LEFT JOIN list l
+                ON li.list_id = l.id
+            LEFT JOIN item it
+                ON it.id = li.item_id
+            LEFT JOIN country co
+                ON it.country_id = co.id
+            LEFT JOIN team t
+                ON t.id = it.team_id
+            WHERE s.question_id IN (${qids.map(() => "?").join(",")})
+        `,
+            qids
+        );
+
+        return rows as Row[];
+    }
+
     // --- Read: posted answers for a whole bet (used for singles/bundles/bonuses)
     async getPostedAnswersForBet(betId: number) {
         const [rows] = await this.pool.execute(

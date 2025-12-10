@@ -1,9 +1,13 @@
 // src/modules/statistics/statistics.repo.ts
-import type { Pool } from "mysql2/promise";
+import type {Pool} from "mysql2/promise";
 import type {
+    BullseyeRow,
+    EfficiencyUserSeasonRow,
+    OnThroneUserSeasonRow,
     TotalScoreSeasonRow,
     TotalScoreUserSeasonRow,
-    EfficiencyUserSeasonRow,
+    VirtualLeagueLeaderRow,
+    AmongUsRow, RealLeagueWinnerRow,
 } from "./statistics.types";
 
 /**
@@ -479,11 +483,309 @@ export class StatisticsRepo {
         WHERE
           c.league_id = 1
           AND c.\`virtual\` = ?
-        ORDER BY
-          c.season_id DESC,
-          c.user_id ASC
-      `,
+        ORDER BY c.season_id DESC,
+                 c.user_id ASC
+            `,
             [isVirtual ? 1 : 0, isVirtual ? 1 : 0],
+        );
+
+        return rows;
+    }
+
+    /**
+     * Seasons that should appear on the "on_throne" page.
+     *
+     * Rule:
+     * - Include only seasons where there is at least one classification snapshot
+     *   for league_id = 1 and virtual = 0.
+     */
+    async getSeasonsForOnThrone(): Promise<TotalScoreSeasonRow[]> {
+        const [rows] = await this.pool.query<TotalScoreSeasonRow[]>(
+            `
+                SELECT s.id    AS season_id,
+                       s.label AS season_label,
+                       100     AS weight_percent
+                FROM season s
+                         INNER JOIN classification c
+                                    ON c.season_id = s.id
+                                        AND c.league_id = 1
+                                        AND c.\`virtual\` = 0
+                GROUP BY s.id, s.label
+                ORDER BY s.id DESC
+            `,
+        );
+
+        return rows;
+    }
+
+    /**
+     * Per-user, per-season total days on position 1 ("on the throne").
+     *
+     * IMPORTANT CHANGE:
+     * - We no longer use classification.insertion as the time anchor.
+     * - Instead, for each snapshot (season/league/virtual/sequence) we derive
+     *   its timestamp from question.answered, which is the *real* moment the
+     *   solution was given.
+     *
+     * Snapshot time:
+     * - For each (season_id, league_id, virtual, sequence) we:
+     *     • Join classification → question on question_id.
+     *     • Take MIN(question.answered) as snapshot_answered.
+     * - We then walk these snapshots in chronological order of snapshot_answered
+     *   and compute full days to the next snapshot.
+     *
+     * The rest of the semantics stay identical:
+     * - Only league_id = 1, virtual = 0.
+     * - Ties for seed = 1: every tied user gets the full day count.
+     * - Last snapshot of a season does not accrue days (no next snapshot).
+     */
+    async getOnThroneUserSeasonDays(): Promise<OnThroneUserSeasonRow[]> {
+        const [rows] = await this.pool.query<OnThroneUserSeasonRow[]>(
+            `
+                SELECT
+                    c.user_id   AS user_id,
+                    c.season_id AS season_id,
+                    SUM(s.days_on_throne) AS days_on_throne
+                FROM (
+                    -- One row per snapshot (season/league/virtual/sequence),
+                    -- timestamped by the REAL solution time from question.answered
+                    SELECT
+                        base.season_id,
+                        base.league_id,
+                        base.\`virtual\`,
+                        base.\`sequence\`,
+                        TIMESTAMPDIFF(
+                            DAY,
+                            base.snapshot_answered,
+                            LEAD(base.snapshot_answered) OVER (
+                                PARTITION BY base.season_id, base.league_id, base.\`virtual\`
+                                ORDER BY base.snapshot_answered
+                            )
+                        ) AS days_on_throne
+                    FROM (
+                        SELECT
+                            c.season_id,
+                            c.league_id,
+                            c.\`virtual\`,
+                            c.\`sequence\`,
+                            MIN(q.answered) AS snapshot_answered
+                        FROM classification c
+                        INNER JOIN question q
+                            ON q.id = c.question_id
+                        WHERE c.league_id = 1
+                          AND c.\`virtual\` = 0
+                        GROUP BY
+                            c.season_id,
+                            c.league_id,
+                            c.\`virtual\`,
+                            c.\`sequence\`
+                    ) AS base
+                ) AS s
+                INNER JOIN classification c
+                    ON c.season_id = s.season_id
+                   AND c.league_id = s.league_id
+                   AND c.\`virtual\` = s.\`virtual\`
+                   AND c.\`sequence\` = s.\`sequence\`
+                WHERE c.seed = 1
+                  AND s.days_on_throne IS NOT NULL
+                  AND s.days_on_throne > 0
+                GROUP BY
+                    c.user_id,
+                    c.season_id
+                ORDER BY
+                    c.season_id DESC,
+                    c.user_id ASC
+            `,
+        );
+
+        return rows;
+    }
+
+    /**
+     * Basic list of all users, for stats pages that must include
+     * every user regardless of season participation.
+     */
+    async getAllUsersBasic(): Promise<
+        Array<{
+            user_id: number;
+            firstname: string;
+            infix: string | null;
+            lastname: string;
+        }>
+        > {
+        const [rows] = await this.pool.query<
+            Array<{ user_id: number; firstname: string; infix: string | null; lastname: string }>
+            >(
+            `
+                SELECT u.id        AS user_id,
+                       u.firstname AS firstname,
+                       u.infix     AS infix,
+                       u.lastname  AS lastname
+                FROM users u
+                ORDER BY u.firstname, u.infix, u.lastname
+            `,
+        );
+
+        return rows;
+    }
+
+    /**
+     * Bullseye rows:
+     * - One row per QUESTION inside a bundle where a user scored exactly 20 points
+     *   over all questions in that bundle (same groupcode) for a bet.
+     * - Bundles are defined by (bet_id, groupcode).
+     * - Virtual handling:
+     *
+     * We intentionally do NOT filter on posted here (rule 24).
+     */
+    async getBullseyeRows(): Promise<BullseyeRow[]> {
+        const [rows] = await this.pool.query<BullseyeRow[]>(
+            `
+            SELECT
+              t.season_id,
+              t.season_label,
+              t.bet_id,
+              t.bet_label,
+              t.groupcode,
+              t.user_id,
+              t.firstname,
+              t.infix,
+              t.lastname,
+              t.question_id,
+              t.question_label,
+              t.is_main,
+              t.is_bonus,
+              t.is_first_bonus,
+              t.answer_label,
+              t.answer_listitem_id,
+              t.bundle_score,
+              t.main_virtual
+            FROM (
+              SELECT
+                s.id    AS season_id,
+                s.label AS season_label,
+                b.id    AS bet_id,
+                b.label AS bet_label,
+                q.groupcode AS groupcode,
+                a.user_id   AS user_id,
+                u.firstname AS firstname,
+                u.infix     AS infix,
+                u.lastname  AS lastname,
+                main.\`virtual\` AS main_virtual,
+                q.id        AS question_id,
+                q.label     AS question_label,
+                (q.question_id IS NULL)                                  AS is_main,
+                (q.question_id IS NOT NULL AND q.points > 0)            AS is_bonus,
+                (
+                  q.question_id IS NOT NULL
+                  AND q.points > 0
+                  AND q.lineup = (
+                    SELECT MIN(qb.lineup)
+                    FROM question qb
+                    WHERE qb.bet_id    = q.bet_id
+                      AND qb.groupcode = q.groupcode
+                      AND qb.question_id IS NOT NULL
+                      AND qb.points > 0
+                  )
+                ) AS is_first_bonus,
+                a.label      AS answer_label,
+                a.listitem_id AS answer_listitem_id,
+                SUM(a.score) OVER (
+                  PARTITION BY s.id, b.id, q.groupcode, a.user_id
+                ) AS bundle_score
+              FROM answer a
+              INNER JOIN question q
+                ON q.id = a.question_id
+              INNER JOIN question main
+                ON main.bet_id    = q.bet_id
+               AND main.groupcode = q.groupcode
+               AND main.question_id IS NULL
+              INNER JOIN bet b
+                ON b.id = q.bet_id
+              INNER JOIN season s
+                ON s.id = b.season_id
+              INNER JOIN users u
+                ON u.id = a.user_id
+              WHERE 1 = 1
+            ) AS t
+            WHERE t.bundle_score = 20
+            ORDER BY
+              t.season_id ASC,
+              t.bet_id ASC,
+              t.groupcode ASC,
+              t.user_id ASC,
+              t.is_main DESC,
+              t.question_id ASC
+            `,
+        );
+
+        return rows;
+    }
+    /**
+     * Real league medals (gold/silver/bronze) from the "winner" table.
+     *
+     * Rules:
+     * - Only seasons where season.closed = '1' (closed seasons).
+     * - Only league_id between 1 and 10.
+     * - Each row represents a single real medal for a user/season/league.
+     */
+    async getRealLeagueMedals(): Promise<RealLeagueWinnerRow[]> {
+        const [rows] = await this.pool.query<RealLeagueWinnerRow[]>(
+            `
+                SELECT
+                    w.season_id               AS season_id,
+                    s.label                   AS season_label,
+                    s.closed                  AS season_closed,
+                    w.user_id                 AS user_id,
+                    u.firstname               AS firstname,
+                    u.infix                   AS infix,
+                    u.lastname                AS lastname,
+                    w.league_id               AS league_id,
+                    l.label                   AS league_label,
+                    l.icon                    AS league_icon
+                FROM winner w
+                INNER JOIN season s
+                    ON s.id = w.season_id
+                   AND s.closed = '1'
+                INNER JOIN users u
+                    ON u.id = w.user_id
+                INNER JOIN league l
+                    ON l.id = w.league_id
+                WHERE w.league_id BETWEEN 1 AND 10
+            `,
+        );
+
+        return rows;
+    }
+
+    /**
+     * Onder Ons (amongus) prizes — both real and virtual.
+     *
+     * Virtual rule:
+     * - Season with closed = '0' (the current open season) → virtual medal.
+     * - Seasons with closed = '1' → real medals.
+     *
+     * The service is responsible for interpreting season_closed and
+     * including/excluding virtual rows based on is_virtual.
+     */
+    async getAmongUsPrizes(): Promise<AmongUsRow[]> {
+        const [rows] = await this.pool.query<AmongUsRow[]>(
+            `
+                SELECT
+                    a.season_id            AS season_id,
+                    s.label                AS season_label,
+                    s.closed               AS season_closed,
+                    a.user_id              AS user_id,
+                    u.firstname            AS firstname,
+                    u.infix                AS infix,
+                    u.lastname             AS lastname,
+                    a.label                AS amongus_label
+                FROM amongus a
+                INNER JOIN season s
+                    ON s.id = a.season_id
+                INNER JOIN users u
+                    ON u.id = a.user_id
+            `,
         );
 
         return rows;
