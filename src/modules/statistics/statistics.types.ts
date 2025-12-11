@@ -372,3 +372,99 @@ export interface AmongUsRow extends RowDataPacket {
     lastname: string;
     amongus_label: string;
 }
+
+// src/modules/statistics/statistics.types.ts
+
+// …keep existing imports and types above…
+
+/**
+ * Request payload for the medal table.
+ * Mirrors the other stats endpoints: user_id is currently unused by BE,
+ * but kept for consistency and future "personal" views.
+ */
+export interface MedalsRequestDto {
+    user_id: number | null;
+    is_virtual: boolean;
+}
+
+// …existing Medals* types stay as-is…
+
+export interface AmongUsRow extends RowDataPacket {
+    season_id: number;
+    season_label: string;
+    season_closed: string;
+    user_id: number;
+    firstname: string;
+    infix: string | null;
+    lastname: string;
+    amongus_label: string;
+}
+
+/**
+ * Source of a Palmares prize.
+ * - "classification" → virtual league winner (open season, derived from classification)
+ * - "winner"        → real league winner from winner table
+ * - "amongus"       → Onder Ons winner from amongus table
+ */
+export type PalmaresSource = "classification" | "winner" | "amongus";
+
+/**
+ * Request payload for the Palmares page.
+ * Kept consistent with other stats endpoints.
+ */
+export interface PalmaresRequestDto {
+    user_id: number | null;
+    is_virtual: boolean;
+}
+
+/**
+ * Season chip for the Palmares page.
+ * Note: no season_open flag here; FE only needs label + id for filtering.
+ */
+export interface PalmaresSeasonDto {
+    season_id: number;
+    season_label: string;
+}
+
+/**
+ * One row in the Palmares table.
+ *
+ * - season_id / season_label → used for grouping + the "Seizoen" column
+ * - user_id / display_name   → winner
+ * - prize_label              → human-readable prize name
+ * - source                   → which table/derivation this prize came from
+ * - is_virtual               → true only for classification-based winners in the CURRENT open season
+ * - league_id / league_icon  → for league-based prizes (can be null for Onder Ons)
+ * - amongus_label            → for Onder Ons icon lookup (can be null)
+ */
+export interface PalmaresRowDto {
+    season_id: number;
+    season_label: string;
+
+    user_id: number;
+    display_name: string;
+
+    prize_label: string;
+    source: PalmaresSource;
+
+    is_virtual: boolean;
+    league_id: number | null;
+    league_icon: string | null;
+    amongus_label: string | null;
+}
+
+/**
+ * Palmares page payload — lives under /api/v1/statistics/palmares.
+ * This does NOT change any existing StatsPageDto payloads.
+ */
+export interface PalmaresPageDto {
+    page_key: "palmares";
+    page_title: string;
+    page_subtitle: string;
+
+    supports_virtual: boolean;
+    is_virtual: boolean;
+
+    seasons: PalmaresSeasonDto[];
+    rows: PalmaresRowDto[];
+}

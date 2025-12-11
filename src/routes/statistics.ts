@@ -9,6 +9,8 @@ import {
     type StatsPageDto,
     type MedalsRequestDto,
     type MedalsPageDto,
+    type PalmaresRequestDto,
+    type PalmaresPageDto,
 } from "../modules/statistics/statistics.types";
 
 import { StatisticsRepo } from "../modules/statistics/statistics.repo";
@@ -127,6 +129,36 @@ router.post("/medals", async (req, res, next) => {
         };
 
         const payload: MedalsPageDto = await statsSvc.getMedalsPage(dto);
+        return res.json(payload);
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * POST /api/v1/statistics/palmares
+ *
+ * Body:
+ * {
+ *   "user_id": number | null,
+ *   "is_virtual": boolean
+ * }
+ *
+ * Response: PalmaresPageDto
+ */
+router.post("/palmares", async (req, res, next) => {
+    try {
+        const body = req.body as Partial<PalmaresRequestDto>;
+
+        const dto: PalmaresRequestDto = {
+            user_id:
+                typeof body.user_id === "number"
+                    ? body.user_id
+                    : body.user_id ?? null,
+            is_virtual: Boolean(body.is_virtual),
+        };
+
+        const payload: PalmaresPageDto = await statsSvc.getPalmaresPage(dto);
         return res.json(payload);
     } catch (err) {
         next(err);

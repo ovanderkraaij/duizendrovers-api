@@ -20,6 +20,9 @@ import type {
     MedalsPrizeDto,
     MedalKind,
     MedalsTotalsDto,
+    PalmaresRequestDto,
+    PalmaresPageDto,
+    PalmaresRowDto,
 } from "./statistics.types";
 import * as classificationService from "../classification/classification.service";
 import { StatisticsRepo } from "./statistics.repo";
@@ -2283,6 +2286,318 @@ export class StatisticsService {
             supports_virtual: true,
             is_virtual,
             rows: is_virtual ? rowsVirtual : rowsReal,
+        };
+
+        return dto;
+    }
+
+    /**
+     * Palmares page:
+     * - Shows all winners per season, ordered as:
+     *     1) virtual winners (classification-based, current open season only)
+     *     2) real league winners (winner table)
+     *     3) Onder Ons winners (amongus table)
+     *
+     * Virtual rules:
+     * - We derive virtual winners only for the CURRENT open season (season.closed = '0').
+     * - Winners in league 1 cannot also be winners in any other league (2..10)
+     *   in the virtual layer — same rule as the medals page.
+     *
+     * Real rules:
+     * - Real league winners come from winner (closed seasons only).
+     * - Onder Ons prizes are always treated as real (never virtual), even in open season.
+     *
+     * Virtual toggle:
+     * - is_virtual = false → only real prizes (winner + amongus).
+     * - is_virtual = true  → virtual winners + all real prizes.
+     */
+    async getPalmaresPage(request: PalmaresRequestDto): Promise<PalmaresPageDto> {
+        const { is_virtual } = request;
+
+        const currentSeasonId = await this.repo.getCurrentSeasonId();
+
+        const [realLeagueRows, amongUsRows] = await Promise.all([
+            this.repo.getRealLeagueMedals(),
+            this.repo.getAmongUsPrizes(),
+        ]);
+
+        const formatDisplayName = (
+            firstname: string,
+            infix: string | null,
+            lastname: string,
+            userId: number,
+        ): string => {
+            const parts = [firstname, infix, lastname]
+                .map((v) => (v ?? "").trim())
+                .filter((v) => v.length > 0);
+            return parts.join(" ") || `User ${userId}`;
+        };
+
+        type RawPalmaresPrize = {
+            seasonId: number;
+            seasonLabel: string;
+            userId: number;
+            displayName: string;
+            prizeLabel: string;
+            source: "classification" | "winner" | "amongus";
+            isVirtual: boolean;
+            leagueId: number | null;
+            leagueIcon: string | null;
+            amongusLabel: string | null;
+        };
+
+        const rawPrizes: RawPalmaresPrize[] = [];
+
+        // ---------------------------------------------------------
+        // 1) Real league winners from "winner" (closed seasons only)
+        // ---------------------------------------------------------
+        for (const row of realLeagueRows) {
+            rawPrizes.push({
+                seasonId: row.season_id,
+                seasonLabel: row.season_label,
+                userId: row.user_id,
+                displayName: formatDisplayName(
+                    row.firstname,
+                    row.infix,
+                    row.lastname,
+                    row.user_id,
+                ),
+                prizeLabel: row.league_label,
+                source: "winner",
+                isVirtual: false,
+                leagueId: row.league_id,
+                leagueIcon: row.league_icon,
+                amongusLabel: null,
+            });
+        }
+
+        // -----------------------------------------------------------------
+        // 2) Virtual league winners (open season only) from classification:
+        //    - season = current open season (if any)
+        //    - league_id 1..10
+        //    - use REAL standings (isVirtual=false) as "if season ended now"
+        //    - league 1 winners cannot also win any other league (2..10)
+        // -----------------------------------------------------------------
+        if (currentSeasonId != null) {
+            const { standings: league1Standings } = await classificationService.current(
+                currentSeasonId,
+                1,
+                /* isVirtual */ false,
+                "user,league,season",
+            );
+
+            const league1WinnerUserIds = new Set<number>();
+            for (const r of (league1Standings as any[]) ?? []) {
+                if (r.seed === 1 && r.user && typeof r.user.id === "number") {
+                    league1WinnerUserIds.add(r.user.id);
+                }
+            }
+
+            if (process.env.NODE_ENV !== "production") {
+                console.log(
+                    "[Palmares] League 1 current winners for virtual exclusion:",
+                    Array.from(league1WinnerUserIds),
+                );
+            }
+
+            for (let leagueId = 1; leagueId <= 10; leagueId++) {
+                const { standings } = await classificationService.current(
+                    currentSeasonId,
+                    leagueId,
+                    /* isVirtual */ false,
+                    "user,league,season",
+                );
+
+                const rows = (standings as any[]) ?? [];
+                if (!rows.length) continue;
+
+                const winnerRows: any[] = [];
+
+                if (leagueId === 1) {
+                    // League 1: all seed=1 users are virtual winners (no exclusion).
+                    for (const r of rows) {
+                        if (r.seed === 1 && r.user && r.league && r.season) {
+                            winnerRows.push(r);
+                            if (process.env.NODE_ENV !== "production") {
+                                console.log(
+                                    `[Palmares] Virtual winner in league 1: user ${r.user.id} (${r.user.firstname} ${r.user.lastname}), seed=1.`,
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    // Leagues 2..10: respect league 1 exclusion.
+                    for (const r of rows) {
+                        if (
+                            r.seed === 1 &&
+                            r.user &&
+                            typeof r.user.id === "number" &&
+                            league1WinnerUserIds.has(r.user.id)
+                        ) {
+                            if (process.env.NODE_ENV !== "production") {
+                                console.log(
+                                    `[Palmares] Excluding user ${r.user.id} (${r.user.firstname} ${r.user.lastname}) from virtual winner in league ${leagueId} (seed=1 in league 1).`,
+                                );
+                            }
+                        }
+                    }
+
+                    const eligible = rows.filter(
+                        (r) =>
+                            r.user &&
+                            typeof r.user.id === "number" &&
+                            !league1WinnerUserIds.has(r.user.id),
+                    );
+
+                    if (!eligible.length) {
+                        if (process.env.NODE_ENV !== "production") {
+                            console.log(
+                                `[Palmares] No eligible virtual winner in league ${leagueId} (all top users are league 1 winners).`,
+                            );
+                        }
+                        continue;
+                    }
+
+                    let bestSeed = Number.POSITIVE_INFINITY;
+                    for (const r of eligible) {
+                        if (typeof r.seed === "number" && r.seed < bestSeed) {
+                            bestSeed = r.seed;
+                        }
+                    }
+
+                    for (const r of eligible) {
+                        if (r.seed === bestSeed && r.user && r.league && r.season) {
+                            winnerRows.push(r);
+                            if (process.env.NODE_ENV !== "production") {
+                                console.log(
+                                    `[Palmares] Virtual winner in league ${leagueId}: user ${r.user.id} (${r.user.firstname} ${r.user.lastname}), seed=${r.seed}.`,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                for (const r of winnerRows) {
+                    const user = r.user;
+                    const league = r.league;
+                    const season = r.season;
+                    if (!user || !league || !season) continue;
+
+                    rawPrizes.push({
+                        seasonId: season.id,
+                        seasonLabel: season.label,
+                        userId: user.id,
+                        displayName: formatDisplayName(
+                            user.firstname,
+                            user.infix ?? null,
+                            user.lastname,
+                            user.id,
+                        ),
+                        prizeLabel: league.label,
+                        source: "classification",
+                        isVirtual: true,
+                        leagueId: league.id,
+                        leagueIcon: league.icon ?? null,
+                        amongusLabel: null,
+                    });
+                }
+            }
+        }
+
+        // ---------------------------------------------------------
+        // 3) Onder Ons (amongus) winners — ALWAYS REAL here
+        // ---------------------------------------------------------
+        for (const row of amongUsRows) {
+            rawPrizes.push({
+                seasonId: row.season_id,
+                seasonLabel: row.season_label,
+                userId: row.user_id,
+                displayName: formatDisplayName(
+                    row.firstname,
+                    row.infix,
+                    row.lastname,
+                    row.user_id,
+                ),
+                prizeLabel: row.amongus_label,
+                source: "amongus",
+                isVirtual: false,
+                leagueId: null,
+                leagueIcon: null,
+                amongusLabel: row.amongus_label,
+            });
+        }
+
+        // ---------------------------------------------------------
+        // 4) Apply virtual toggle + build seasons + rows
+        // ---------------------------------------------------------
+        const prizes = is_virtual
+            ? rawPrizes
+            : rawPrizes.filter((p) => !p.isVirtual);
+
+        // Seasons: all seasons present in the current prize set (newest first)
+        const seasonMap = new Map<number, string>();
+        for (const p of prizes) {
+            if (!seasonMap.has(p.seasonId)) {
+                seasonMap.set(p.seasonId, p.seasonLabel);
+            }
+        }
+
+        const seasons = Array.from(seasonMap.entries())
+            .sort((a, b) => b[0] - a[0]) // newest first
+            .map(([seasonId, label]) => ({
+                season_id: seasonId,
+                season_label: label,
+            }));
+
+        // Order within a season:
+        //   1) source: classification → winner → amongus
+        //   2) league_id ascending (null last)
+        //   3) prize_label
+        //   4) display_name
+        const sourceRank: Record<RawPalmaresPrize["source"], number> = {
+            classification: 0,
+            winner: 1,
+            amongus: 2,
+        };
+
+        prizes.sort((a, b) => {
+            if (a.seasonId !== b.seasonId) {
+                return b.seasonId - a.seasonId; // season grouping (newest first)
+            }
+            const sr = sourceRank[a.source] - sourceRank[b.source];
+            if (sr !== 0) return sr;
+
+            const la = a.leagueId ?? Number.MAX_SAFE_INTEGER;
+            const lb = b.leagueId ?? Number.MAX_SAFE_INTEGER;
+            if (la !== lb) return la - lb;
+
+            const pl = a.prizeLabel.localeCompare(b.prizeLabel);
+            if (pl !== 0) return pl;
+
+            return a.displayName.localeCompare(b.displayName);
+        });
+
+        const rows: PalmaresRowDto[] = prizes.map((p) => ({
+            season_id: p.seasonId,
+            season_label: p.seasonLabel,
+            user_id: p.userId,
+            display_name: p.displayName,
+            prize_label: p.prizeLabel,
+            source: p.source,
+            is_virtual: p.isVirtual,
+            league_id: p.leagueId,
+            league_icon: p.leagueIcon,
+            amongus_label: p.amongusLabel,
+        }));
+
+        const dto: PalmaresPageDto = {
+            page_key: "palmares",
+            page_title: "Palmares",
+            page_subtitle: "Alle winnaars op een rij",
+            supports_virtual: true,
+            is_virtual,
+            seasons,
+            rows,
         };
 
         return dto;
